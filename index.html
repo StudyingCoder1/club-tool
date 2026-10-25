@@ -377,24 +377,23 @@ function parseRegistrationWorkbook(wb){
     });
   }
 
-  // 去重：同玩聚号保留创建时间最新（并列取靠后行），跨票种同样只保留最新；报名顺位取最早一次
-  const byId = new Map();
-  for (const r of regRows) {
-    const cur = byId.get(r.playId);
-    if (!cur) byId.set(r.playId, r);
-    else if (r.createdAt >= cur.createdAt) { r.order = Math.min(cur.order, r.order); byId.set(r.playId, r); }
-    else cur.order = Math.min(cur.order, r.order);
-  }
-  const dedupCount = regRows.length - byId.size;
-  const kept = Array.from(byId.values()).sort((a, b) => a.order - b.order);
-  const keptSet = new Set(kept.map(r => r.regId));
-  const dupSamples = regRows.filter(r => !keptSet.has(r.regId)).slice(0, 5).map(r => `${r.nickname}(${r.playId})`);
+  // 名额语义：每个「报名标识」= 一个已购票名额。同一玩聚号多条记录（替朋友代报、
+  // 购买多个名额、报名多个票种）均分别计入；仅完全相同的报名标识（异常重复行）剔除。
+  const byReg = new Map();
+  for (const r of regRows) if (!byReg.has(r.regId)) byReg.set(r.regId, r);
+  const dupRows = regRows.length - byReg.size;
+  const kept = Array.from(byReg.values()).sort((a, b) => a.order - b.order);
+  const slotPeople = new Map();
+  for (const r of kept) slotPeople.set(r.playId, (slotPeople.get(r.playId) || 0) + 1);
+  const multiSlot = Array.from(slotPeople.entries()).filter(([, n]) => n > 1)
+    .map(([id, n]) => { const p = kept.find(x => x.playId === id); return { playId: id, nickname: p ? p.nickname : id, count: n }; });
 
   return {
     activity,
     participants: kept.filter(r => r.status === "已报名"),
     waitlist: kept.filter(r => r.status === "候补"),
-    dedup: { count: dedupCount, samples: dupSamples },
+    dedup: { count: dupRows, samples: [] },
+    multiSlot,
     anomalies
   };
 }
@@ -434,9 +433,9 @@ function buildGrouping(input){
   const warnings = [], courts = [], overflow = [], manual = [], unassigned = [];
   const typeOf = t => (input.ticketTypes && input.ticketTypes[t]) || null;
 
-  /* S1 预处理：有效参赛者（已报名且未被排除） */
+  /* S1 预处理：有效参赛名额（已报名且未被排除）。同一玩聚号可占多个名额（regId 唯一） */
   const active = input.participants.filter(p => p.status === "已报名" && !p.excluded);
-  const byId = new Map(active.map(p => [p.playId, p]));
+  const slotsOf = playId => active.filter(p => p.playId === playId);
 
   /* S2 票种分流 */
   const sess = { MX: [], HS: [], NS: [], FREE: [] };
@@ -445,14 +444,15 @@ function buildGrouping(input){
     if (st) sess[st].push(p); else unassigned.push({ p, reason: `票种「${p.ticket}」未配置场次类型` });
   }
 
-  /* S3 搭子单元化（同组必须同场次类型，进入对应场次；已选择拆分的组不单元化） */
-  const grouped = new Set();
+  /* S3 搭子单元化（同组必须同场次类型，进入对应场次；已选择拆分的组不单元化；
+   *    绑定按玩聚号生效——该人的全部名额随组进入同一单元） */
+  const grouped = new Set();   // 已被搭子单元占用的 regId
   const units = { MX: [], HS: [], NS: [], FREE: [] };
   for (const g of (input.partnerGroups || [])) {
     if (input.decisions && input.decisions[g.id] === "split") continue;   // E07 选择拆分 → 各自独立参与
-    const members = (g.memberIds || []).map(id => byId.get(id)).filter(Boolean);
+    const members = [...new Set(g.memberIds || [])].flatMap(id => slotsOf(String(id)));
     if (!members.length) continue;
-    members.forEach(m => grouped.add(m.playId));
+    members.forEach(m => grouped.add(m.regId));
     const vals = members.map(m => ratingValue(m.rating)).filter(v => v !== null);
     const maxV = Math.max(...vals), minV = Math.min(...vals);
     const st0 = typeOf(members[0].ticket);
@@ -481,7 +481,7 @@ function buildGrouping(input){
       } else okUnits.push(u);
     }
     for (const p of sess[st]) {
-      if (grouped.has(p.playId)) continue;
+      if (grouped.has(p.regId)) continue;
       const v = ratingValue(p.rating);
       if (v === null) { unassigned.push({ p, reason: "未评级（分组前检查应已处理）" }); continue; }
       if (v < range[0] - EPS || v > range[1] + EPS) {
@@ -533,7 +533,7 @@ function buildGrouping(input){
         name: names[i] || `场地${i + 1}`, sessionType: st, label: SESSIONS[st].label,
         mainLevel: pool.main, underfull: pool.size < C,
         members: pool.ordered.map((m, idx) => ({
-          playId: m.playId, nickname: m.nickname, rating: m.rating, gender: m.gender,
+          playId: m.playId, regId: m.regId, nickname: m.nickname, rating: m.rating, gender: m.gender,
           gradient: m.__grad, rotation: idx + 1,
           unitLevel: m.__unitLevel != null ? m.__unitLevel : ratingValue(m.rating),
           groupId: m.__groupId || null, groupName: m.__groupName || null,
@@ -553,7 +553,7 @@ function buildGrouping(input){
     const c = courts[i];
     if (c.sessionType === "NS") {
       const males = c.members.filter(m => m.gender === "男");
-      if (males.length) males.forEach(m => { unassigned.push({ p: byId.get(m.playId), reason: "女双局含男生（E08）" }); });
+      if (males.length) males.forEach(m => { unassigned.push({ p: m, reason: "女双局含男生（E08）" }); });
       c.members = c.members.filter(m => m.gender !== "男");
     }
   }
@@ -568,8 +568,8 @@ function buildGrouping(input){
       names.push(...(cn.length ? cn : autoCourtNames(1, "FREE")));
     }
     if (!names.length) names.push("自由1场");
-    // 未绑定搭子的个人补为单元（搭子单元已在 S3 建立）
-    for (const p of sess.FREE) if (!grouped.has(p.playId))
+    // 未绑定搭子的个人名额补为单元（搭子单元已在 S3 建立）
+    for (const p of sess.FREE) if (!grouped.has(p.regId))
       units.FREE.push({ isGroup: false, members: [p], size: 1, key: num(p.playId), order: p.order,
         level: ratingValue(p.rating), minLevel: ratingValue(p.rating), crossKept: false });
     let freeUnits = units.FREE.slice().sort((a, b) => a.order - b.order);
@@ -601,7 +601,7 @@ function buildGrouping(input){
         name: b.name, sessionType: "FREE", label: SESSIONS.FREE.label, mainLevel: null,
         underfull: false, noRotation: true,
         members: b.units.flatMap(u => u.members).map(m => ({
-          playId: m.playId, nickname: m.nickname, rating: m.rating, gender: m.gender,
+          playId: m.playId, regId: m.regId, nickname: m.nickname, rating: m.rating, gender: m.gender,
           gradient: 0, rotation: 0, crossKept: false
         }))
       });
@@ -737,7 +737,7 @@ function checkInvariants(result, input){
   for (const c of rotCourts) {
     const main = c.mainLevel;
     for (const m of c.members) {
-      pooledIds.push(m.playId);
+      pooledIds.push(m.regId != null ? m.regId : m.playId);
       const rv = ratingValue(m.rating);
       if (rv === null) { v.push(`I6 ${c.name}: ${m.nickname} 无评级却在池中`); continue; }
       if (!m.crossKept && Math.abs(rv - main) > 0.5 + EPS)
@@ -772,20 +772,21 @@ function checkInvariants(result, input){
       }
     }
   }
-  // I7 人数守恒 + 无重复
+  // I7 名额守恒 + 无重复（按报名标识）
   const seen = new Map();
   pooledIds.forEach(id => seen.set(id, (seen.get(id) || 0) + 1));
-  for (const [id, n] of seen) if (n > 1) v.push(`I7 ${id} 出现在 ${n} 个池中`);
+  for (const [id, n] of seen) if (n > 1) v.push(`I7 名额 ${id} 出现在 ${n} 个池中`);
+  const keyOf = x => (x.p && x.p.regId != null ? x.p.regId : x.p && x.p.playId);
   const accounted = new Set([
     ...pooledIds,
-    ...result.overflow.map(x => x.p.playId),
-    ...result.unassigned.filter(x => x.p).map(x => x.p.playId),
-    ...result.manual.flatMap(x => x.unit.members.map(m => m.playId)),
-    ...result.courts.filter(c => c.sessionType === "FREE").flatMap(c => c.members.map(m => m.playId))
+    ...result.overflow.map(x => keyOf(x)),
+    ...result.unassigned.filter(x => x.p).map(x => keyOf(x)),
+    ...result.manual.flatMap(x => x.unit.members.map(m => m.regId != null ? m.regId : m.playId)),
+    ...result.courts.filter(c => c.sessionType === "FREE").flatMap(c => c.members.map(m => m.regId != null ? m.regId : m.playId))
   ]);
-  for (const p of active) if (!accounted.has(p.playId)) v.push(`I7 ${p.nickname}(${p.playId}) 既未入池也未列入任何名单`);
-  // I5 候补/排除不入池
-  const bad = input.participants.filter(p => (p.status !== "已报名" || p.excluded) && accounted.has(p.playId));
+  for (const p of active) if (!accounted.has(p.regId != null ? p.regId : p.playId)) v.push(`I7 ${p.nickname}(${p.regId || p.playId}) 既未入池也未列入任何名单`);
+  // I5 候补/排除名额不入池
+  const bad = input.participants.filter(p => (p.status !== "已报名" || p.excluded) && accounted.has(p.regId != null ? p.regId : p.playId));
   bad.forEach(p => v.push(`I5 ${p.nickname} 非参赛状态却出现在结果中`));
   return v;
 }
@@ -965,8 +966,9 @@ function importReg(file){
       saveGroups();
       renderReg();
       const msgs = [];
-      if (parsed.dedup.count) msgs.push(`去重 ${parsed.dedup.count} 条重复报名（如 ${parsed.dedup.samples.join("、")}）`);
-      msgs.push(`已报名 ${parsed.participants.length} 人，候补 ${parsed.waitlist.length} 人`);
+      if (parsed.dedup.count) msgs.push(`剔除完全重复报名行 ${parsed.dedup.count} 条`);
+      if (parsed.multiSlot && parsed.multiSlot.length) msgs.push(`同人多名额 ${parsed.multiSlot.length} 人（${parsed.multiSlot.slice(0, 3).map(m => m.nickname + "×" + m.count).join("、")}），每个名额均计入分组`);
+      msgs.push(`已报名 ${parsed.participants.length} 个名额，候补 ${parsed.waitlist.length} 个名额`);
       toast(msgs.join("；"), "ok");
       gotoStep(1);
     } catch(err){ openModal("导入失败", `<div class="errlist"><b>${esc(err.message)}</b><br>请确认是小程序导出的报名表</div>`); }
@@ -990,9 +992,14 @@ function renderReg(){
   $("#activityCard").innerHTML = `<span>🏸 <b>${esc(a.title || "活动")}</b></span><span>开始：${esc(a.startTime||"—")}</span><span>结束：${esc(a.endTime||"—")}</span><span>组织者：${esc(a.organizer||"—")}</span>`;
   const q = $("#regSearch").value.trim().toLowerCase();
   const rows = [...reg.participants, ...reg.waitlist].filter(r => !q || r.nickname.toLowerCase().includes(q) || r.playId.includes(q) || r.ticket.toLowerCase().includes(q));
-  const unmatched = reg.participants.filter(r => !memberOf(r.playId)).length;
-  const unrated = reg.participants.filter(r => { const rr = regRating(r.playId); return rr === undefined || rr === null; }).length;
-  $("#regStats").textContent = `已报名 ${reg.participants.length}（未匹配 ${unmatched} / 无评级 ${unrated}）　候补 ${reg.waitlist.length}　${q ? "筛选 "+rows.length : ""}`;
+  const unmatched = reg.participants.filter(r => !memberOf(r.playId));
+  const unrated = reg.participants.filter(r => { const rr = regRating(r.playId); return rr === undefined || rr === null; });
+  const uniquePeople = new Set(reg.participants.map(r => r.playId)).size;
+  const multiCnt = (reg.multiSlot || []).length;
+  // 同玩聚号名额计数（用于行内标记）
+  const slotCnt = new Map();
+  [...reg.participants, ...reg.waitlist].forEach(r => slotCnt.set(r.playId, (slotCnt.get(r.playId) || 0) + 1));
+  $("#regStats").textContent = `已报名 ${reg.participants.length} 个名额（${uniquePeople} 人${multiCnt ? `，同人多名额 ${multiCnt} 人` : ""}）　未匹配 ${unmatched.length} / 无评级 ${unrated.length}　候补 ${reg.waitlist.length}${q ? "　筛选 " + rows.length : ""}`;
   $("#regTable tbody").innerHTML = rows.map(r => {
     const m = memberOf(r.playId);
     const rr = regRating(r.playId);
@@ -1006,7 +1013,8 @@ function renderReg(){
         : `<button class="btn small ghost" data-act="exclude" data-id="${esc(r.regId)}">排除</button><button class="btn small ghost" data-act="wait" data-id="${esc(r.regId)}">转候补</button>`);
     const ticketShort = r.ticket.length > 22 ? r.ticket.slice(0,22)+"…" : r.ticket;
     const pastNick = (m && m.pastNicknames && m.pastNicknames.length) ? esc(m.pastNicknames.join("、").slice(0,24)) : "—";
-    return `<tr><td>${esc(r.playId)}</td><td class="muted">${esc(r.regId)}</td><td><b>${esc(r.nickname)}</b>${past}</td><td class="muted">${pastNick}</td><td class="${r.gender==="女"?"female":"male"}">${esc(r.gender)}</td><td>${ratingHtml}</td><td title="${esc(r.ticket)}">${esc(ticketShort)}</td><td>${st}</td><td>${op}</td></tr>`;
+    const slotChip = slotCnt.get(r.playId) > 1 ? `<span class="chip warn">名额×${slotCnt.get(r.playId)}</span>` : "";
+    return `<tr><td>${esc(r.playId)}</td><td class="muted">${esc(r.regId)}</td><td><b>${esc(r.nickname)}</b>${past}${slotChip}</td><td class="muted">${pastNick}</td><td class="${r.gender==="女"?"female":"male"}">${esc(r.gender)}</td><td>${ratingHtml}</td><td title="${esc(r.ticket)}">${esc(ticketShort)}</td><td>${st}</td><td>${op}</td></tr>`;
   }).join("");
   $$("#regTable tbody button").forEach(b => b.onclick = () => {
     let r = [...reg.participants, ...reg.waitlist].find(x => String(x.regId) === b.dataset.id);
@@ -1052,7 +1060,9 @@ function renderPartners(){
   });
 }
 function openGroupEditor(g){
-  const active = reg.participants.filter(p => !p.excluded);
+  // 选择器按人（玩聚号）去重展示——选中即绑定该人全部名额
+  const active = []; const seenP = new Set();
+  reg.participants.filter(p => !p.excluded).forEach(p => { if (!seenP.has(p.playId)) { seenP.add(p.playId); active.push(p); } });
   const selected = new Set(g ? g.memberIds : []);
   openModal(g ? "编辑搭子组" : "新增搭子组", `
     <label class="field"><span>组名（如：A组）</span><input type="text" id="gName" value="${esc(g ? g.name : "搭子组"+(partnerGroups.length+1))}"></label>
@@ -1135,11 +1145,13 @@ function validateGrouping(){
   const byId = new Map(active.map(p => [p.playId, p]));
   const { types } = collectTicketConfig();
 
-  const unmatched = active.filter(p => !memberOf(p.playId));
-  const unrated = active.filter(p => { const rr = regRating(p.playId); return rr === undefined || rr === null; });
-  const unmatchedNoUnrated = unmatched.filter(p => !unrated.includes(p));
+  // E03/E04 按「人」去重列出（同一人的多个名额只需补录/评级一次）
+  const byPerson = new Map();
+  active.forEach(p => { if (!byPerson.has(p.playId)) byPerson.set(p.playId, p); });
+  const personRows = [...byPerson.values()];
+  const unmatched = personRows.filter(p => !memberOf(p.playId));
+  const unratedKnown = personRows.filter(p => { const m = memberOf(p.playId); return m && !m.rating; });
   if (unmatched.length) blocking.push({ code:"E03", msg:`${unmatched.length} 名报名者不在成员库（可在弹窗中一键补录）：${unmatched.map(p=>p.nickname).slice(0,8).join("、")}${unmatched.length>8?"…":""}`, rows: unmatched, kind:"unmatched" });
-  const unratedKnown = unrated.filter(p => memberOf(p.playId));
   if (unratedKnown.length) blocking.push({ code:"E04", msg:`${unratedKnown.length} 名报名者未评级：${unratedKnown.map(p=>p.nickname).slice(0,8).join("、")}${unratedKnown.length>8?"…":""}`, rows: unratedKnown, kind:"unrated" });
 
   for (const t in types) {
@@ -1168,7 +1180,7 @@ function validateGrouping(){
     }
   }
 
-  const malesInNS = active.filter(p => types[p.ticket] === "NS" && p.gender === "男");
+  const malesInNS = personRows.filter(p => types[p.ticket] === "NS" && p.gender === "男");
   if (malesInNS.length) blocking.push({ code:"E08", msg:`${malesInNS.length} 名男生报名了女双票种：${malesInNS.map(p=>p.nickname).join("、")}`, rows: malesInNS, kind:"nsMale" });
 
   return { blocking, confirmations };
@@ -1216,7 +1228,7 @@ function showQuickFix(fixables, v){
       });
       if (emptySel && stillUnratedRows.length) { toast(`仍有 ${stillUnratedRows.length} 人未评级（未评级不能分组）`, "err"); saveMembers(); renderMembers(); return true; }
       if (box.querySelector("#qfExcludeMales") && box.querySelector("#qfExcludeMales").checked)
-        nsMale && nsMale.rows.forEach(p => p.excluded = true);
+        nsMale && nsMale.rows.forEach(p => reg.participants.forEach(x => { if (x.playId === p.playId) x.excluded = true; }));
       store.write("rc_reg", reg);
       saveMembers(); renderMembers(); renderReg();
       const v2 = validateGrouping();
@@ -1289,8 +1301,8 @@ function renderResult(){
   if (!r) { $("#resultSummary").innerHTML = `<div class="empty">尚未分组。请完成步骤①–③后点击「开始分组」。</div>`; $("#resultWarnings").innerHTML=""; $("#courtsView").innerHTML=""; renderHistory(); return; }
   const a = lastResult.activity || {};
   $("#resultSummary").innerHTML = `<div class="sumline">
-    <span>🏸 <b>${esc(a.title||"活动")}</b></span><span>有效报名 <b>${r.stats.totalActive}</b> 人</span>
-    <span>入池 <b>${r.stats.pooled}</b> 人</span><span>溢出转候补 <b>${r.stats.overflow}</b></span>
+    <span>🏸 <b>${esc(a.title||"活动")}</b></span><span>有效报名 <b>${r.stats.totalActive}</b> 个名额</span>
+    <span>入池 <b>${r.stats.pooled}</b> 个名额</span><span>溢出转候补 <b>${r.stats.overflow}</b></span>
     <span>未成池/待处理 <b>${r.stats.unassigned + r.stats.manual}</b></span><span>生成于 ${new Date(lastResult.ts).toLocaleString()}</span></div>`;
   const w = [];
   if (r.warnings.length) w.push(`<div class="warnbox"><b>⚠ 警示（${r.warnings.length}）：</b><ul style="margin:4px 0 0 18px">${r.warnings.map(x=>`<li>${esc(x.msg)}</li>`).join("")}</ul></div>`);
