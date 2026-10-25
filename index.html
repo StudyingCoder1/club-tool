@@ -1,0 +1,1506 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>羽毛球俱乐部评级分组工具</title>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<style>
+:root{
+  --accent:#D4875A; --accent-dark:#b5673c; --bg:#f6f4f1; --card:#fff;
+  --text:#2b2622; --muted:#8a8178; --line:#e5ddd4;
+  --mx-bg:#e8f5e9; --mx-bd:#2e7d32; --hs-bg:#e3f2fd; --hs-bd:#1565c0;
+  --ns-bg:#fce4ec; --ns-bd:#8e24aa; --free-bg:#fff3e0; --free-bd:#e65100;
+  --danger:#c62828; --ok:#2e7d32;
+}
+*{box-sizing:border-box; margin:0; padding:0;}
+body{font-family:"Microsoft YaHei","PingFang SC",sans-serif; background:var(--bg); color:var(--text); font-size:14px;}
+header{background:#1A2330; color:#fff; padding:0 20px; display:flex; align-items:center; gap:16px; flex-wrap:wrap; position:sticky; top:0; z-index:50;}
+header .logo{font-size:17px; font-weight:bold; padding:12px 0; white-space:nowrap;}
+header .logo em{font-style:normal; color:var(--accent);}
+nav.tabs{display:flex; gap:4px; flex:1;}
+nav.tabs button{background:none; border:none; color:#b8c0cc; padding:14px 16px; font-size:15px; cursor:pointer; border-bottom:3px solid transparent;}
+nav.tabs button.active{color:#fff; border-bottom-color:var(--accent); font-weight:bold;}
+header .actions{display:flex; gap:8px; padding:8px 0;}
+header .actions button{background:#2a3648; color:#dfe5ee; border:1px solid #3a4a62; border-radius:6px; padding:6px 12px; cursor:pointer; font-size:13px;}
+header .actions button:hover{background:#38485f;}
+main{max-width:1200px; margin:0 auto; padding:16px;}
+.card{background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px; margin-bottom:14px;}
+.card h3{font-size:15px; margin-bottom:10px; color:#1A2330;}
+.toolbar{display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:12px;}
+.btn{background:var(--accent); color:#fff; border:none; border-radius:6px; padding:8px 14px; cursor:pointer; font-size:13px;}
+.btn:hover{background:var(--accent-dark);}
+.btn.ghost{background:#fff; color:var(--accent-dark); border:1px solid var(--accent);}
+.btn.ghost:hover{background:#fdf1ea;}
+.btn.small{padding:4px 9px; font-size:12px;}
+.btn.danger{background:#fff; color:var(--danger); border:1px solid var(--danger);}
+.btn.big{font-size:16px; padding:12px 28px;}
+.btn:disabled{opacity:.45; cursor:not-allowed;}
+input[type=text],input[type=number],select{border:1px solid var(--line); border-radius:6px; padding:7px 9px; font-size:13px; background:#fff; color:var(--text);}
+input:focus,select:focus{outline:none; border-color:var(--accent);}
+table.grid{width:100%; border-collapse:collapse; font-size:13px;}
+table.grid th{background:#f0ebe5; text-align:left; padding:7px 8px; border-bottom:2px solid var(--line); white-space:nowrap; position:sticky; top:0;}
+table.grid td{padding:6px 8px; border-bottom:1px solid var(--line); vertical-align:middle;}
+table.grid tr:hover td{background:#faf7f3;}
+.tablewrap{max-height:65vh; overflow:auto; border:1px solid var(--line); border-radius:8px;}
+.chip{display:inline-block; padding:1px 8px; border-radius:10px; font-size:12px; margin-left:4px;}
+.chip.warn{background:#fdecea; color:var(--danger);}
+.chip.ok{background:#e8f5e9; color:var(--ok);}
+.chip.info{background:#e3f2fd; color:#1565c0;}
+.muted{color:var(--muted); font-size:12px;}
+.female{color:#c2185b; font-weight:bold;}
+.male{color:#1565c0;}
+.cross{background:#fff3cd;}
+/* 步骤条 */
+.stepper{display:flex; gap:6px; flex-wrap:wrap; margin-bottom:14px;}
+.stepper button{flex:1; min-width:120px; background:#fff; border:1px solid var(--line); border-radius:8px; padding:9px 6px; cursor:pointer; font-size:13px; color:var(--muted);}
+.stepper button.active{border-color:var(--accent); color:var(--accent-dark); font-weight:bold; background:#fdf1ea;}
+.stepper button b{display:inline-block; width:20px; height:20px; line-height:20px; text-align:center; border-radius:50%; background:var(--line); color:#555; margin-right:6px; font-size:12px;}
+.stepper button.active b{background:var(--accent); color:#fff;}
+.stepper button.done b{background:var(--ok); color:#fff;}
+/* 场地块 */
+.courts{display:grid; grid-template-columns:repeat(auto-fill,minmax(250px,1fr)); gap:12px;}
+.court{border-radius:10px; border:2px solid; padding:10px; min-width:0;}
+.court.mx{background:var(--mx-bg); border-color:var(--mx-bd);}
+.court.hs{background:var(--hs-bg); border-color:var(--hs-bd);}
+.court.ns{background:var(--ns-bg); border-color:var(--ns-bd);}
+.court.free{background:var(--free-bg); border-color:var(--free-bd);}
+.court .ctitle{font-weight:bold; margin-bottom:6px; display:flex; justify-content:space-between; align-items:center;}
+.court ul{list-style:none;}
+.court li{padding:3px 4px; border-bottom:1px dashed rgba(0,0,0,.08); font-size:13px; display:flex; align-items:center; gap:5px; flex-wrap:wrap;}
+.court li .grad{display:inline-block; min-width:20px; color:var(--muted); font-size:12px; text-align:right;}
+.court li .tag{font-size:11px; background:rgba(255,255,255,.7); border-radius:8px; padding:0 6px;}
+/* 弹窗 */
+#modalMask{position:fixed; inset:0; background:rgba(20,15,10,.45); display:none; z-index:100; align-items:flex-start; justify-content:center; overflow:auto; padding:40px 16px;}
+#modalMask.show{display:flex;}
+.modal{background:#fff; border-radius:12px; width:640px; max-width:100%; padding:18px; box-shadow:0 10px 40px rgba(0,0,0,.25);}
+.modal h3{margin-bottom:12px; color:#1A2330;}
+.modal .mbody{max-height:60vh; overflow:auto; margin-bottom:14px;}
+.modal .mfoot{display:flex; gap:8px; justify-content:flex-end; flex-wrap:wrap;}
+.errlist{background:#fdecea; border:1px solid #f5c6c2; border-radius:8px; padding:10px; margin-bottom:8px; font-size:13px;}
+.errlist b{color:var(--danger);}
+.errlist ul{margin:6px 0 0 18px;}
+/* Toast */
+#toasts{position:fixed; bottom:24px; left:50%; transform:translateX(-50%); z-index:200; display:flex; flex-direction:column; gap:8px; align-items:center;}
+.toast{background:#1A2330; color:#fff; border-radius:8px; padding:10px 18px; font-size:13px; box-shadow:0 4px 16px rgba(0,0,0,.3); opacity:.96; max-width:88vw;}
+.toast.err{background:#a33327;}
+.toast.ok{background:#2e5d3a;}
+/* 搭子组 */
+.pgroups{display:flex; flex-direction:column; gap:10px;}
+.pgroup{border:1px solid var(--line); border-radius:8px; padding:10px; background:#fdfcfa;}
+.pgroup .ghead{display:flex; align-items:center; gap:8px; margin-bottom:6px; flex-wrap:wrap;}
+.pgroup .ghead b{color:var(--accent-dark);}
+.memberchips{display:flex; flex-wrap:wrap; gap:6px;}
+.mchip{background:#fff; border:1px solid var(--line); border-radius:14px; padding:3px 10px; font-size:12px; display:inline-flex; align-items:center; gap:5px;}
+.mchip .x{cursor:pointer; color:var(--danger); font-weight:bold;}
+/* 票种配置 */
+.ticketcfg{border:1px solid var(--line); border-radius:8px; padding:10px; margin-bottom:10px; background:#fdfcfa;}
+.ticketcfg .trow{display:flex; gap:8px; flex-wrap:wrap; align-items:center;}
+.ticketcfg .tname{font-weight:bold; flex-basis:100%; font-size:13px;}
+.sumline{display:flex; gap:14px; flex-wrap:wrap; background:#f0ebe5; border-radius:8px; padding:8px 12px; margin-bottom:12px; font-size:13px;}
+.sumline b{color:var(--accent-dark);}
+.empty{padding:30px; text-align:center; color:var(--muted);}
+.warnbox{background:#fff8e1; border:1px solid #ffe082; border-radius:8px; padding:10px 12px; margin-bottom:10px; font-size:13px;}
+.warnbox b{color:#9c6f00;}
+.histitem{border:1px solid var(--line); border-radius:8px; padding:8px 10px; margin-bottom:6px; display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; font-size:13px;}
+label.field{display:flex; flex-direction:column; gap:4px; font-size:13px;}
+label.field span{color:var(--muted);}
+fieldset{border:1px solid var(--line); border-radius:8px; padding:10px; margin-bottom:10px;}
+legend{font-size:13px; color:var(--muted); padding:0 6px;}
+@media (max-width:720px){ header{padding:0 10px;} main{padding:8px;} .modal{padding:12px;} }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">🏸 羽毛球俱乐部<em>评级分组</em>工具</div>
+  <nav class="tabs">
+    <button id="tabBtnMembers" class="active">俱乐部成员明细</button>
+    <button id="tabBtnGroup">羽毛球活动分组</button>
+  </nav>
+  <div class="actions">
+    <button id="btnSync">☁ 云端同步</button>
+    <button id="btnSettings">⚙ 设置</button>
+  </div>
+</header>
+<main>
+<!-- ═══════════ 页签一：成员明细 ═══════════ -->
+<section id="tabMembers">
+  <div class="card">
+    <div class="toolbar">
+      <button class="btn" id="btnImportMembers">📥 导入成员表</button>
+      <button class="btn ghost" id="btnExportMembers">📤 导出</button>
+      <input type="text" id="memberSearch" placeholder="搜索昵称/过往昵称/玩聚号…" style="width:220px">
+      <select id="memberRatingFilter"><option value="">全部评级</option></select>
+      <select id="memberGenderFilter"><option value="">全部性别</option><option>男</option><option>女</option><option>未知</option></select>
+      <span class="muted" id="memberStats"></span>
+    </div>
+    <div class="tablewrap"><table class="grid" id="memberTable">
+      <thead><tr><th>玩聚号</th><th>昵称（过往昵称）</th><th>性别</th><th>羽毛球等级</th><th>自评水平</th><th>标签</th><th>参与/取消</th><th>最后参与</th></tr></thead>
+      <tbody></tbody>
+    </table></div>
+  </div>
+</section>
+
+<!-- ═══════════ 页签二：活动分组 ═══════════ -->
+<section id="tabGroup" style="display:none">
+  <div class="stepper">
+    <button data-step="1" class="active"><b>1</b>上传报名表</button>
+    <button data-step="2"><b>2</b>搭子绑定</button>
+    <button data-step="3"><b>3</b>票种与场地</button>
+    <button data-step="4"><b>4</b>分组结果</button>
+  </div>
+
+  <div id="step1" class="card">
+    <h3>① 上传报名表（微信小程序导出 .xls / .xlsx）</h3>
+    <div class="toolbar">
+      <button class="btn" id="btnImportReg">📥 上传报名表</button>
+      <button class="btn ghost small" id="btnClearReg" style="display:none">清空本次报名数据</button>
+      <span class="muted" id="regFileHint">尚未上传</span>
+    </div>
+    <div id="activityCard" style="display:none" class="sumline"></div>
+    <div class="toolbar" id="regToolbar" style="display:none">
+      <input type="text" id="regSearch" placeholder="搜索昵称/玩聚号/票种…" style="width:220px">
+      <span class="muted" id="regStats"></span>
+    </div>
+    <div class="tablewrap" id="regTableWrap" style="display:none"><table class="grid" id="regTable">
+      <thead><tr><th>玩聚号</th><th>报名标识</th><th>昵称</th><th>旧昵称</th><th>性别</th><th>羽毛球水平</th><th>票种</th><th>状态</th><th>操作</th></tr></thead>
+      <tbody></tbody>
+    </table></div>
+  </div>
+
+  <div id="step2" class="card" style="display:none">
+    <h3>② 搭子绑定（提前私聊报备的组合，分组时不拆分）</h3>
+    <div class="toolbar">
+      <button class="btn" id="btnAddGroup">➕ 新增搭子组</button>
+      <span class="muted">同组成员需报名同一场次类型的票种；组内评级差 &gt;0.5 会在分组前提示确认。</span>
+    </div>
+    <div class="pgroups" id="pgroups"></div>
+  </div>
+
+  <div id="step3" class="card" style="display:none">
+    <h3>③ 票种与场地配置</h3>
+    <div id="ticketList"></div>
+    <div style="margin-top:12px; text-align:center;">
+      <button class="btn big" id="btnDoGroup">🚀 开始分组</button>
+    </div>
+  </div>
+
+  <div id="step4" class="card" style="display:none">
+    <h3>④ 分组结果</h3>
+    <div id="resultSummary"></div>
+    <div id="resultWarnings"></div>
+    <div class="toolbar" style="margin-bottom:10px">
+      <button class="btn" id="btnExportResult">📤 导出Excel</button>
+      <button class="btn ghost" id="btnCopyResult">📋 复制文本（发微信群）</button>
+      <button class="btn ghost" id="btnRegroup">🔄 重新分组</button>
+    </div>
+    <div class="courts" id="courtsView"></div>
+    <h3 style="margin-top:16px">历史记录（最近10次）</h3>
+    <div id="historyList"></div>
+  </div>
+</section>
+</main>
+
+<div id="modalMask"><div class="modal" id="modalBox"></div></div>
+<div id="toasts"></div>
+<input type="file" id="fileMembers" accept=".xls,.xlsx" style="display:none">
+<input type="file" id="fileReg" accept=".xls,.xlsx" style="display:none">
+
+<script>
+/* ==== GROUP CORE START ==== */
+"use strict";
+/* ═══════════════════════════════════════════════════════════════
+ * 分组核心（纯函数区，无 DOM 依赖）—— 单一算法入口：buildGrouping
+ * 改分组规则只改这里；配套自动化测试 test/core.test.js
+ * ═══════════════════════════════════════════════════════════════ */
+const RATINGS = ["0","0.5","1","1.5","2","2.5","3+"];
+const RATING_VALUE = {"0":0,"0.5":0.5,"1":1,"1.5":1.5,"2":2,"2.5":2.5,"3+":3.5};
+const SESSIONS = {
+  MX:  { label:"萌新局",   pool:8, range:[0,1] },
+  HS:  { label:"混双局",   pool:7, range:[1.5,2.5] },
+  NS:  { label:"女双局",   pool:7, range:[1.5,2.5], femaleOnly:true },
+  FREE:{ label:"3+自由场", pool:0, range:null }
+};
+const EPS = 1e-9;
+
+function ratingValue(r){ return (r in RATING_VALUE) ? RATING_VALUE[r] : null; }
+
+/* 玩聚号/报名标识规范化：浮点(1558046.0)、文本、全角数字 → 纯数字字符串 */
+function normId(v){
+  if (v === null || v === undefined || v === "") return null;
+  if (typeof v === "number") return Number.isFinite(v) ? String(Math.round(v)) : null;
+  let s = String(v).trim().replace(/\.0+$/, "");
+  s = s.replace(/[\uff10-\uff19]/g, c => String(c.charCodeAt(0) - 0xff10));
+  const n = parseInt(s.replace(/[^0-9]/g, ""), 10);
+  return Number.isFinite(n) ? String(n) : null;
+}
+
+/* 人工评级解析："2级"→"2"、"3级+"/"4级"→"3+"、数字→档位、空/无法识别→null */
+function parseRating(v){
+  if (v === null || v === undefined || v === "") return null;
+  if (v in RATING_VALUE) return String(v);
+  const s = String(v).trim();
+  const m = s.match(/^(\d+(?:\.\d+)?)\s*级?\s*\+?$/);
+  if (m) {
+    const n = parseFloat(m[1]);
+    if (n >= 3) return "3+";
+    for (const r of RATINGS) if (Math.abs(ratingValue(r) - n) < EPS) return r;
+    return null;
+  }
+  if (/^\d+(\.\d+)?$/.test(s)) return parseRating(parseFloat(s));
+  if (/^3\s*\+/.test(s) || /^3级\+/.test(s)) return "3+";
+  return null;
+}
+
+function excelDate(v){
+  if (v === null || v === undefined || v === "") return "";
+  if (typeof v === "number" && v > 30000 && v < 60000) {
+    const d = new Date(Math.round((v - 25569) * 86400 * 1000));
+    return d.toISOString().slice(0, 10);
+  }
+  return String(v);
+}
+
+/* ── 成员表解析（微信小程序导出，表头列名定位） ─────────────── */
+function parseMemberWorkbook(wb){
+  const sheetName = wb.SheetNames.find(n => /成员/.test(n)) || wb.SheetNames[0];
+  const ws = wb.Sheets[sheetName];
+  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: "" });
+  const anomalies = [];
+  if (!rows.length) return { rows: [], anomalies: ["文件为空"] };
+  const head = (rows[0] || []).map(h => String(h).trim());
+  const idx = name => head.indexOf(name);
+  const iNick = idx("昵称"), iId = idx("玩聚号"), iGender = idx("性别"),
+        iJoin = idx("参与次数"), iCancel = idx("取消次数"), iLast = idx("最后参与时间"),
+        iSelf = idx("羽毛球水平"), iTag = idx("羽毛球标签"), iReal = idx("羽毛球真实水平");
+  if (iId < 0 || iNick < 0) return { rows: [], anomalies: ["表头缺少「昵称」或「玩聚号」列，请确认是小程序导出的成员表"] };
+  const seen = new Map(); const out = [];
+  for (let r = 1; r < rows.length; r++) {
+    const row = rows[r];
+    const playId = normId(row[iId]);
+    const nickname = String(row[iNick] || "").trim();
+    if (!playId && !nickname) continue;
+    if (!playId) { anomalies.push(`第${r+1}行：玩聚号为空（昵称：${nickname || "空"}），已跳过`); continue; }
+    if (seen.has(playId)) { anomalies.push(`第${r+1}行：玩聚号 ${playId} 在文件内重复，仅保留第一条`); continue; }
+    seen.set(playId, 1);
+    const gender = String(row[iGender] || "").trim() === "女" ? "女" : (String(row[iGender] || "").trim() === "男" ? "男" : "未知");
+    out.push({
+      playId, nickname, gender,
+      selfLevel: String(row[iSelf] || "").trim(),
+      tag: String(row[iTag] || "").trim(),
+      realLevel: parseRating(iReal >= 0 ? row[iReal] : null),
+      joinCount: iJoin >= 0 ? Number(row[iJoin]) || 0 : 0,
+      cancelCount: iCancel >= 0 ? Number(row[iCancel]) || 0 : 0,
+      lastJoinAt: iLast >= 0 ? excelDate(row[iLast]) : ""
+    });
+  }
+  return { rows: out, anomalies };
+}
+
+/* ── 成员合并（以玩聚号 upsert；昵称变化追加过往昵称） ───────── */
+function mergeMembers(existing, incoming){
+  const map = new Map(existing.map(m => [m.playId, { ...m }]));
+  const stats = { added: 0, updated: 0, renamed: 0, renamedList: [] };
+  for (const m of incoming) {
+    const cur = map.get(m.playId);
+    if (!cur) {
+      map.set(m.playId, { ...m, pastNicknames: [], rating: m.realLevel || null, updatedAt: Date.now() });
+      stats.added++;
+    } else {
+      if (m.nickname && m.nickname !== cur.nickname) {
+        cur.pastNicknames = cur.pastNicknames || [];
+        if (cur.nickname && !cur.pastNicknames.includes(cur.nickname)) cur.pastNicknames.push(cur.nickname);
+        cur.nickname = m.nickname;
+        stats.renamed++; stats.renamedList.push(`${m.playId}：${cur.pastNicknames[cur.pastNicknames.length-1] || ""} → ${m.nickname}`);
+      }
+      if (m.gender !== "未知") cur.gender = m.gender;
+      cur.selfLevel = m.selfLevel || cur.selfLevel;
+      cur.tag = m.tag || cur.tag;
+      if (m.realLevel) cur.rating = m.realLevel;          // 空值不覆盖库内评级
+      cur.joinCount  = Math.max(cur.joinCount || 0, m.joinCount || 0);
+      cur.cancelCount = Math.max(cur.cancelCount || 0, m.cancelCount || 0);
+      if (m.lastJoinAt) cur.lastJoinAt = m.lastJoinAt > (cur.lastJoinAt || "") ? m.lastJoinAt : cur.lastJoinAt;
+      cur.updatedAt = Date.now();
+      stats.updated++;
+    }
+  }
+  return { list: Array.from(map.values()), stats };
+}
+
+/* ── 报名表解析（19列，前几行为活动信息区） ─────────────────── */
+function parseRegistrationWorkbook(wb){
+  const sheetName = wb.SheetNames.find(n => /报名/.test(n)) || wb.SheetNames[0];
+  const ws = wb.Sheets[sheetName];
+  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: "" });
+  const anomalies = [];
+  if (!rows.length) return { activity: {}, participants: [], waitlist: [], anomalies: ["文件为空"] };
+  const head = (rows[0] || []).map(h => String(h).trim());
+  const idx = name => head.indexOf(name);
+  const iSeq = idx("序号"), iTicket = idx("票种"), iNick = idx("昵称"), iReg = idx("报名标识"),
+        iId = idx("玩聚号"), iGender = idx("性别"), iStatus = idx("报名状态"), iCreated = idx("创建时间");
+  if (iId < 0 || iNick < 0 || iTicket < 0) return { activity: {}, participants: [], waitlist: [], anomalies: ["表头缺少「票种/昵称/玩聚号」列，请确认是小程序导出的报名表"] };
+
+  // 活动信息区：数据行之前的非空行
+  const activity = { title: "", startTime: "", endTime: "", organizer: "" };
+  let dataStart = rows.length;
+  for (let r = 1; r < rows.length; r++) {
+    const seq = rows[r][iSeq];
+    if (typeof seq === "number" || (typeof seq === "string" && /^\d+(\.0)?$/.test(seq.trim()))) { dataStart = r; break; }
+    const text = String(rows[r][0] || "").trim();
+    if (!text) continue;
+    if (!activity.title && r <= 2 && !/^(开始|结束|组织者|微信号|手机号)/.test(text)) {
+      activity.title = text.split("\n")[0].trim();
+      activity.titleFull = text;   // 完整多行标题（场次说明/自带球拍等），复制文本用
+    }
+    const m = text.match(/^(开始时间|结束时间|组织者)[:：]?\s*(.*)$/);
+    if (m) { if (m[1] === "开始时间") activity.startTime = m[2]; else if (m[1] === "结束时间") activity.endTime = m[2]; else activity.organizer = m[2]; }
+  }
+
+  const regRows = [];
+  let order = 0;
+  for (let r = dataStart; r < rows.length; r++) {
+    const row = rows[r];
+    const playId = normId(row[iId]);
+    const nickname = String(row[iNick] || "").trim();
+    const ticket = String(row[iTicket] || "").trim();
+    if (!playId && !nickname) continue;
+    if (!playId) { anomalies.push(`第${r+1}行：玩聚号为空（昵称：${nickname}），已跳过`); continue; }
+    order++;
+    regRows.push({
+      regId: normId(row[iReg]) || `${playId}-${order}`,
+      playId, nickname,
+      gender: String(row[iGender] || "").trim() === "女" ? "女" : (String(row[iGender] || "").trim() === "男" ? "男" : "未知"),
+      ticket,
+      status: String(row[iStatus] || "").trim() === "候补" ? "候补" : "已报名",
+      createdAt: String(row[iCreated] || "").trim(),
+      order
+    });
+  }
+
+  // 去重：同玩聚号保留创建时间最新（并列取靠后行），跨票种同样只保留最新；报名顺位取最早一次
+  const byId = new Map();
+  for (const r of regRows) {
+    const cur = byId.get(r.playId);
+    if (!cur) byId.set(r.playId, r);
+    else if (r.createdAt >= cur.createdAt) { r.order = Math.min(cur.order, r.order); byId.set(r.playId, r); }
+    else cur.order = Math.min(cur.order, r.order);
+  }
+  const dedupCount = regRows.length - byId.size;
+  const kept = Array.from(byId.values()).sort((a, b) => a.order - b.order);
+  const keptSet = new Set(kept.map(r => r.regId));
+  const dupSamples = regRows.filter(r => !keptSet.has(r.regId)).slice(0, 5).map(r => `${r.nickname}(${r.playId})`);
+
+  return {
+    activity,
+    participants: kept.filter(r => r.status === "已报名"),
+    waitlist: kept.filter(r => r.status === "候补"),
+    dedup: { count: dedupCount, samples: dupSamples },
+    anomalies
+  };
+}
+
+/* ── 票种 → 场次类型 自动建议 ───────────────────────────────── */
+function suggestSessionType(ticket){
+  const t = String(ticket || "");
+  if (/女双/.test(t)) return "NS";
+  if (/萌新/.test(t)) return "MX";
+  if (/3\s*\+|3级\+|3\+级|3级(?!\d)/.test(t) && !/0-3|1-3|2-3/.test(t)) return "FREE";
+  if (/自由/.test(t)) return "FREE";
+  return "HS";
+}
+
+function autoCourtNames(n, sessionType){
+  const prefix = { MX: "萌新", HS: "混双", NS: "女双", FREE: "自由" }[sessionType] || "场地";
+  const names = [];
+  for (let i = 1; i <= n; i++) names.push(`${prefix}${i}场`);
+  return names;
+}
+
+/* ── 分组主算法 S1–S8（单一入口） ──────────────────────────────
+ * input = {
+ *   participants: [{playId,regId,nickname,gender,rating,ticket,order,excluded,status}],
+ *   ticketTypes:  { 票种文本: "MX"|"HS"|"NS"|"FREE" },
+ *   ticketCourts: { 票种文本: [场地名…] },
+ *   partnerGroups:[{id,name,memberIds:[]}],
+ *   decisions:    { 搭子组id: "keep"|"split" },   // E07 结果
+ *   allowOverflow: bool,                          // E11 确认后为 true
+ *   poolSizes:    {MX:8,HS:7,NS:7}
+ * }
+ * 返回 { courts, overflow, manual, unassigned, warnings, stats }
+ * 不变式见 checkInvariants
+ *──────────────────────────────────────────────────────────────*/
+function buildGrouping(input){
+  const poolSizes = Object.assign({ MX: 8, HS: 7, NS: 7 }, input.poolSizes || {});
+  const warnings = [], courts = [], overflow = [], manual = [], unassigned = [];
+  const typeOf = t => (input.ticketTypes && input.ticketTypes[t]) || null;
+
+  /* S1 预处理：有效参赛者（已报名且未被排除） */
+  const active = input.participants.filter(p => p.status === "已报名" && !p.excluded);
+  const byId = new Map(active.map(p => [p.playId, p]));
+
+  /* S2 票种分流 */
+  const sess = { MX: [], HS: [], NS: [], FREE: [] };
+  for (const p of active) {
+    const st = typeOf(p.ticket);
+    if (st) sess[st].push(p); else unassigned.push({ p, reason: `票种「${p.ticket}」未配置场次类型` });
+  }
+
+  /* S3 搭子单元化（同组必须同场次类型，进入对应场次；已选择拆分的组不单元化） */
+  const grouped = new Set();
+  const units = { MX: [], HS: [], NS: [], FREE: [] };
+  for (const g of (input.partnerGroups || [])) {
+    if (input.decisions && input.decisions[g.id] === "split") continue;   // E07 选择拆分 → 各自独立参与
+    const members = (g.memberIds || []).map(id => byId.get(id)).filter(Boolean);
+    if (!members.length) continue;
+    members.forEach(m => grouped.add(m.playId));
+    const vals = members.map(m => ratingValue(m.rating)).filter(v => v !== null);
+    const maxV = Math.max(...vals), minV = Math.min(...vals);
+    const st0 = typeOf(members[0].ticket);
+    const kept = st0 !== "FREE" && input.decisions && input.decisions[g.id] === "keep" && (maxV - minV) > 0.5 + EPS;
+    const unit = {
+      isGroup: true, groupId: g.id, groupName: g.name || `搭子组${g.id}`,
+      members: members.slice().sort((a, b) => cmpId(a.playId, b.playId)),
+      size: members.length, key: Math.min(...members.map(m => num(m.playId))),
+      order: Math.min(...members.map(m => m.order)),
+      level: maxV, minLevel: minV, crossKept: !!kept
+    };
+    const st = typeOf(members[0].ticket);
+    if (st && units[st]) units[st].push(unit);   // FREE 场不轮转，但分场时保持搭子同场
+  }
+
+  /* 评级范围检查（I8）：搭子单元按组内最高评级判定 */
+  for (const st of ["MX", "HS", "NS"]) {
+    const range = SESSIONS[st].range;
+    const okUnits = [];
+    for (const u of units[st]) {
+      const maxOk = u.level >= range[0] - EPS && u.level <= range[1] + EPS;
+      if (!maxOk) {
+        const reason = `搭子组「${u.groupName}」最高评级 ${fmtLevel(u.level)} 超出${SESSIONS[st].label}准入（${range[0]}~${range[1]}）`;
+        if (u.crossKept) { manual.push({ unit: u, reason }); warnings.push({ code: "CROSS-PLACE", msg: reason + "，已单列待人工放置" }); }
+        else { u.members.forEach(m => unassigned.push({ p: m, reason })); warnings.push({ code: "RATING-MISMATCH", msg: reason }); }
+      } else okUnits.push(u);
+    }
+    for (const p of sess[st]) {
+      if (grouped.has(p.playId)) continue;
+      const v = ratingValue(p.rating);
+      if (v === null) { unassigned.push({ p, reason: "未评级（分组前检查应已处理）" }); continue; }
+      if (v < range[0] - EPS || v > range[1] + EPS) {
+        unassigned.push({ p, reason: `评级 ${p.rating} 超出${SESSIONS[st].label}准入（${range[0]}~${range[1]}）` });
+        warnings.push({ code: "RATING-MISMATCH", msg: `${p.nickname}（${p.rating}）票种为${SESSIONS[st].label}，评级不匹配，已单列待处理` });
+      } else {
+        okUnits.push({ isGroup: false, members: [p], size: 1, key: num(p.playId), order: p.order, level: v, minLevel: v, crossKept: false });
+      }
+    }
+    units[st] = okUnits;
+  }
+
+  /* S4–S6 容量预检 + 贪心组池 + 梯度排序（按场次） */
+  for (const st of ["MX", "HS", "NS"]) {
+    let poolUnits = units[st];
+    if (!poolUnits.length) continue;
+    // 该场次的场地名（合并同类型票种的场地）
+    const names = [];
+    for (const t in input.ticketTypes) if (input.ticketTypes[t] === st) {
+      const cn = (input.ticketCourts && input.ticketCourts[t]) || [];
+      names.push(...(cn.length ? cn : autoCourtNames(1, st)));
+    }
+    if (!names.length) names.push("场地1");
+    const C = poolSizes[st], N = names.length;
+
+    // S4 超员处理（E11 确认后 allowOverflow）：按报名顺序保留，整单元取舍
+    const total = poolUnits.reduce((s, u) => s + u.size, 0);
+    if (total > N * C && input.allowOverflow) {
+      const sorted = poolUnits.slice().sort((a, b) => a.order - b.order);
+      const kept = []; let acc = 0;
+      for (const u of sorted) {
+        if (acc + u.size <= N * C) { kept.push(u); acc += u.size; }
+        else u.members.forEach(m => overflow.push({ p: m, reason: `${SESSIONS[st].label}超员（容量 ${N * C}）` }));
+      }
+      poolUnits = kept;
+      warnings.push({ code: "E11", msg: `${SESSIONS[st].label}报名超员，已按报名顺序保留 ${acc} 人，其余转候补` });
+    } else if (total > N * C) {
+      poolUnits.forEach(u => u.members.forEach(m => unassigned.push({ p: m, reason: `${SESSIONS[st].label}超员且未确认（E11）` })));
+      poolUnits = [];
+    }
+
+    // S5 贪心组池
+    const { pools, leftover } = buildPools(poolUnits, C, st, N);
+
+    // S6+S7+S8 排序、女生均衡、落场
+    pools.forEach((pool, i) => {
+      finalizePool(pool, st);
+      courts.push({
+        name: names[i] || `场地${i + 1}`, sessionType: st, label: SESSIONS[st].label,
+        mainLevel: pool.main, underfull: pool.size < C,
+        members: pool.ordered.map((m, idx) => ({
+          playId: m.playId, nickname: m.nickname, rating: m.rating, gender: m.gender,
+          gradient: m.__grad, rotation: idx + 1,
+          unitLevel: m.__unitLevel != null ? m.__unitLevel : ratingValue(m.rating),
+          groupId: m.__groupId || null, groupName: m.__groupName || null,
+          crossKept: !!m.__cross
+        }))
+      });
+    });
+    // 场地耗尽的剩余人员 → 未成池
+    if (leftover.length) {
+      leftover.forEach(u => u.members.forEach(m => unassigned.push({ p: m, reason: `${SESSIONS[st].label}场地不足，未成池` })));
+      warnings.push({ code: "NO-COURT", msg: `${SESSIONS[st].label}场地不足，${leftover.reduce((s,u)=>s+u.size,0)} 人未成池，请增加场地或调整` });
+    }
+  }
+
+  /* 女双防御检查（E08 应在入口拦截） */
+  for (let i = courts.length - 1; i >= 0; i--) {
+    const c = courts[i];
+    if (c.sessionType === "NS") {
+      const males = c.members.filter(m => m.gender === "男");
+      if (males.length) males.forEach(m => { unassigned.push({ p: byId.get(m.playId), reason: "女双局含男生（E08）" }); });
+      c.members = c.members.filter(m => m.gender !== "男");
+    }
+  }
+
+  /* 3+ 自由场：不轮转、不配对，按场地均衡分场（搭子组同场，先报名先排） */
+  if (sess.FREE.length) {
+    for (const p of sess.FREE) if (ratingValue(p.rating) !== null && ratingValue(p.rating) < 3 - EPS)
+      warnings.push({ code: "FREE-LOW", msg: `${p.nickname}（${p.rating}）报名3+自由场但评级低于3，请留意` });
+    const names = [];
+    for (const t in input.ticketTypes) if (input.ticketTypes[t] === "FREE") {
+      const cn = (input.ticketCourts && input.ticketCourts[t]) || [];
+      names.push(...(cn.length ? cn : autoCourtNames(1, "FREE")));
+    }
+    if (!names.length) names.push("自由1场");
+    // 未绑定搭子的个人补为单元（搭子单元已在 S3 建立）
+    for (const p of sess.FREE) if (!grouped.has(p.playId))
+      units.FREE.push({ isGroup: false, members: [p], size: 1, key: num(p.playId), order: p.order,
+        level: ratingValue(p.rating), minLevel: ratingValue(p.rating), crossKept: false });
+    let freeUnits = units.FREE.slice().sort((a, b) => a.order - b.order);
+    const total = freeUnits.reduce((s, u) => s + u.size, 0);
+    const cap = (input.poolSizes && input.poolSizes.FREE) || 0;   // 0 = 不限，按场地均分
+    if (cap > 0 && total > names.length * cap) {
+      if (input.allowOverflow) {
+        const keptU = []; let acc = 0;
+        for (const u of freeUnits) {
+          if (acc + u.size <= names.length * cap) { keptU.push(u); acc += u.size; }
+          else u.members.forEach(m => overflow.push({ p: m, reason: "自由场超员" }));
+        }
+        freeUnits = keptU;
+        warnings.push({ code: "E11", msg: `自由场报名超员，已按报名顺序保留 ${acc} 人，其余转候补` });
+      } else {
+        freeUnits.forEach(u => u.members.forEach(m => unassigned.push({ p: m, reason: "自由场超员且未确认（E11）" })));
+        freeUnits = [];
+      }
+    }
+    // 依次把单元放进当前人最少的场地（组不拆、场间人数差 ≤ 最大单元）
+    const bins = names.map(n => ({ name: n, units: [], size: 0 }));
+    for (const u of freeUnits) {
+      const b = bins.reduce((m, x) => x.size < m.size ? x : m, bins[0]);
+      b.units.push(u); b.size += u.size;
+    }
+    bins.forEach(b => {
+      if (!b.units.length) return;
+      courts.push({
+        name: b.name, sessionType: "FREE", label: SESSIONS.FREE.label, mainLevel: null,
+        underfull: false, noRotation: true,
+        members: b.units.flatMap(u => u.members).map(m => ({
+          playId: m.playId, nickname: m.nickname, rating: m.rating, gender: m.gender,
+          gradient: 0, rotation: 0, crossKept: false
+        }))
+      });
+      // 标注搭子组信息
+      b.units.forEach(u => { if (u.isGroup) u.members.forEach(m => {
+        const t = courts[courts.length - 1].members.find(x => x.playId === m.playId);
+        if (t) { t.groupId = u.groupId; t.groupName = u.groupName; }
+      }); });
+    });
+  }
+
+  const stats = {
+    totalActive: active.length,
+    pooled: courts.reduce((s, c) => s + c.members.length, 0),
+    overflow: overflow.length, unassigned: unassigned.length, manual: manual.length
+  };
+  return { courts, overflow, manual, unassigned, warnings, stats };
+}
+
+function cmpId(a, b){ return num(a) - num(b); }
+function num(id){ return parseInt(String(id).replace(/^0+/, "") || "0", 10); }
+function fmtLevel(v){ for (const r of RATINGS) if (Math.abs(RATING_VALUE[r] - v) < EPS) return r; return String(v); }
+
+/* 贪心组池：主档优先，±0.5 相邻补位（先多人侧、并列先高档侧）。
+ * 返回 { pools, leftover }：leftover 为场地耗尽后未能入池的单元 */
+function buildPools(units, C, st, maxPools){
+  const buckets = new Map(); // level → [units]
+  for (const u of units) {
+    const k = u.level;
+    if (!buckets.has(k)) buckets.set(k, []);
+    buckets.get(k).push(u);
+  }
+  for (const arr of buckets.values()) arr.sort((a, b) => a.key - b.key);
+
+  const people = k => (buckets.get(k) || []).reduce((s, u) => s + u.size, 0);
+  // 主档选择：萌新固定高档优先（1→0.5→0）；其余按"建池满度"评分——
+  // 该档人数 + 两侧相邻档可吸纳人数（受池容量限制）越大越优先（能通过 ±0.5 补位装下更多人），
+  // 并列取人数多的档，再并列取高档（覆盖"人数最多优先"原规则）
+  const fit = k => Math.min(people(k) + people(Math.round((k + 0.5) * 2) / 2) + people(Math.round((k - 0.5) * 2) / 2), C);
+  const pickMain = () => {
+    if (st === "MX") return Math.max(...buckets.keys());
+    let best = null;
+    for (const k of buckets.keys()) {
+      if (best === null || fit(k) > fit(best) ||
+          (fit(k) === fit(best) && (people(k) > people(best) || (people(k) === people(best) && k > best)))) best = k;
+    }
+    return best;
+  };
+
+  const pools = [];
+  let leftover = [];
+  while (buckets.size) {
+    if (maxPools && pools.length >= maxPools) {
+      for (const arr of buckets.values()) leftover.push(...arr);
+      break;
+    }
+    const main = pickMain();
+    const pool = { main, units: [], size: 0 };
+    let space = C;
+    // 主档整单元放入
+    const leftovers = [];
+    for (const u of buckets.get(main)) {
+      if (u.size <= space) { pool.units.push(u); pool.size += u.size; space -= u.size; }
+      else leftovers.push(u);
+    }
+    setBucket(buckets, main, leftovers);
+    // 相邻 ±0.5 补位
+    const sides = [main + 0.5, main - 0.5].filter(k => (buckets.get(k) || []).length)
+      .sort((a, b) => people(b) - people(a) || b - a);
+    for (const s of sides) {
+      if (space <= 0) break;
+      const rest = [];
+      for (const u of buckets.get(s)) {
+        // 补位单元需整体落在主档 ±0.5 内（跨档保留组豁免，由标注提示）
+        if (u.size <= space && (u.crossKept || u.minLevel >= main - 0.5 - EPS)) { pool.units.push(u); pool.size += u.size; space -= u.size; }
+        else rest.push(u);
+      }
+      setBucket(buckets, s, rest);
+    }
+    pool.underfull = pool.size < C;
+    pools.push(pool);
+  }
+  // 回填：场地耗尽遗留的单元，尝试放入同场次已有未满且主档±0.5 匹配的池
+  const still = [];
+  for (const u of leftover) {
+    const target = pools.find(p => p.size + u.size <= C && Math.abs(p.main - u.level) <= 0.5 + EPS && (u.crossKept || u.minLevel >= p.main - 0.5 - EPS));
+    if (target) { target.units.push(u); target.size += u.size; target.underfull = target.size < C; }
+    else still.push(u);
+  }
+  return { pools, leftover: still };
+}
+function setBucket(map, k, arr){ if (arr.length) map.set(k, arr); else map.delete(k); }
+
+/* S6 池内梯度排序（评级↓ 玩聚号↑，搭子相邻）+ S7 女生均衡 */
+function finalizePool(pool, st){
+  pool.units.sort((a, b) => (b.level - a.level) || (a.key - b.key));
+  const flat = [];
+  for (const u of pool.units) {
+    const members = u.members.slice().sort((a, b) => cmpId(a.playId, b.playId));
+    for (const m of members) { m.__groupId = u.isGroup ? u.groupId : null; m.__groupName = u.isGroup ? u.groupName : null; m.__cross = u.crossKept; m.__unitLevel = u.level; }
+    flat.push(members);
+  }
+  // 梯度序号（按强度排序预排）
+  let g = 0;
+  for (const ms of flat) for (const m of ms) m.__grad = ++g;
+
+  // S7 女生均衡（萌新/混双；搭子单元整块移动）
+  if (st === "MX" || st === "HS") {
+    const blocks = flat.map(ms => ({ ms, female: ms.some(m => m.gender === "女") }));
+    const others = blocks.filter(b => !b.female), fems = blocks.filter(b => b.female);
+    if (fems.length && others.length) {
+      const seq = [];
+      let oi = 0;
+      for (let i = 0; i < fems.length; i++) {
+        const at = Math.floor((i + 1) * others.length / (fems.length + 1));
+        while (oi < at && oi < others.length) { seq.push(others[oi].ms); oi++; }
+        seq.push(fems[i].ms);
+      }
+      while (oi < others.length) { seq.push(others[oi].ms); oi++; }
+      pool.ordered = seq.flat();
+      return;
+    }
+  }
+  pool.ordered = flat.flat();
+}
+
+/* ── 算法不变式检查（供自动化回归） ─────────────────────────── */
+function checkInvariants(result, input){
+  const v = [];
+  const active = input.participants.filter(p => p.status === "已报名" && !p.excluded);
+  const pooledIds = [];
+  const rotCourts = result.courts.filter(c => c.sessionType !== "FREE");
+  for (const c of rotCourts) {
+    const main = c.mainLevel;
+    for (const m of c.members) {
+      pooledIds.push(m.playId);
+      const rv = ratingValue(m.rating);
+      if (rv === null) { v.push(`I6 ${c.name}: ${m.nickname} 无评级却在池中`); continue; }
+      if (!m.crossKept && Math.abs(rv - main) > 0.5 + EPS)
+        v.push(`I1 ${c.name}: ${m.nickname}(${m.rating}) 与主档 ${fmtLevel(main)} 差超过0.5`);
+    }
+    // I4 女双全女
+    if (c.sessionType === "NS") c.members.forEach(m => { if (m.gender === "男") v.push(`I4 ${c.name}: 男生 ${m.nickname}`); });
+    // I8 范围
+    const range = SESSIONS[c.sessionType].range;
+    if (range) c.members.forEach(m => { const rv = ratingValue(m.rating); if (rv !== null && !m.crossKept && (rv < range[0] - EPS || rv > range[1] + EPS)) v.push(`I8 ${c.name}: ${m.nickname}(${m.rating}) 超出${c.label}范围`); });
+    // I6 梯度序列：按单元档位非增（搭子组以组内最高评级占据档位，组内按玩聚号排）
+    const byGrad = c.members.slice().sort((a, b) => a.gradient - b.gradient);
+    for (let i = 1; i < byGrad.length; i++) {
+      const a = byGrad[i - 1].unitLevel != null ? byGrad[i - 1].unitLevel : ratingValue(byGrad[i - 1].rating);
+      const b = byGrad[i].unitLevel != null ? byGrad[i].unitLevel : ratingValue(byGrad[i].rating);
+      if (a !== null && b !== null && b > a + EPS) v.push(`I6 ${c.name}: 梯度${byGrad[i].gradient}(${byGrad[i].rating}) 强于梯度${byGrad[i-1].gradient}(${byGrad[i-1].rating})`);
+    }
+  }
+  // I2 搭子同池（已选择拆分的组不检查）
+  const courtOf = new Map();
+  result.courts.forEach(c => c.members.forEach(m => courtOf.set(m.playId, c.name)));
+  for (const g of (input.partnerGroups || [])) {
+    if (input.decisions && input.decisions[g.id] === "split") continue;
+    const ids = g.memberIds.filter(id => active.some(p => p.playId === id));
+    const courtsSet = new Set(ids.map(id => courtOf.get(id)).filter(Boolean));
+    if (ids.length >= 2) {
+      if (courtsSet.size === 0) { /* 整组未入池（超员/范围），由 unassigned/overflow 覆盖 */ }
+      else if (courtsSet.size > 1) v.push(`I2 搭子组「${g.name || g.id}」被拆到多个场地: ${[...courtsSet].join(",")}`);
+      else {
+        const inPool = ids.filter(id => courtOf.has(id)).length;
+        if (inPool > 0 && inPool < ids.length) v.push(`I2 搭子组「${g.name || g.id}」仅部分成员入池`);
+      }
+    }
+  }
+  // I7 人数守恒 + 无重复
+  const seen = new Map();
+  pooledIds.forEach(id => seen.set(id, (seen.get(id) || 0) + 1));
+  for (const [id, n] of seen) if (n > 1) v.push(`I7 ${id} 出现在 ${n} 个池中`);
+  const accounted = new Set([
+    ...pooledIds,
+    ...result.overflow.map(x => x.p.playId),
+    ...result.unassigned.filter(x => x.p).map(x => x.p.playId),
+    ...result.manual.flatMap(x => x.unit.members.map(m => m.playId)),
+    ...result.courts.filter(c => c.sessionType === "FREE").flatMap(c => c.members.map(m => m.playId))
+  ]);
+  for (const p of active) if (!accounted.has(p.playId)) v.push(`I7 ${p.nickname}(${p.playId}) 既未入池也未列入任何名单`);
+  // I5 候补/排除不入池
+  const bad = input.participants.filter(p => (p.status !== "已报名" || p.excluded) && accounted.has(p.playId));
+  bad.forEach(p => v.push(`I5 ${p.nickname} 非参赛状态却出现在结果中`));
+  return v;
+}
+/* ==== GROUP CORE END ==== */
+</script>
+
+<script>
+/* ═════════════════════════ 应用层（UI / 存储 / 同步） ═════════════════════════ */
+(function(){
+"use strict";
+const $ = s => document.querySelector(s);
+const $$ = s => Array.from(document.querySelectorAll(s));
+const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+
+/* ── 存储 ── */
+const store = {
+  read(key, fallback){ try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; } catch(e){ return fallback; } },
+  write(key, val){ try { localStorage.setItem(key, JSON.stringify(val)); return true; } catch(e){ toast("本地保存失败：" + e.message, "err"); return false; } }
+};
+let members = store.read("rc_members", []);
+let config = Object.assign({ poolSizes:{MX:8,HS:7,NS:7,FREE:0}, partnerGap:0.5 }, store.read("rc_config", {}));
+let ticketMap = store.read("rc_ticket_map", {});         // 票种→类型 记忆
+let partnerGroups = store.read("rc_partner_groups", []); // [{id,name,memberIds}]
+let history = store.read("rc_results", []);
+let reg = store.read("rc_reg", null);   // 当前报名（含排除/候补状态），刷新自动恢复
+let crossDecisions = {}; // 本次分组运行内的 E07 决策 {gid:'keep'|'split'}
+let allowOverflow = false;
+let lastResult = null;
+
+/* ── Toast / 弹窗 ── */
+function toast(msg, type){ const t = document.createElement("div"); t.className = "toast " + (type||""); t.textContent = msg; $("#toasts").appendChild(t); setTimeout(()=>{ t.style.opacity="0"; t.style.transition="opacity .4s"; setTimeout(()=>t.remove(), 400); }, type==="err"?5000:2600); }
+function openModal(title, bodyHTML, actions){
+  const box = $("#modalBox");
+  box.innerHTML = `<h3>${esc(title)}</h3><div class="mbody">${bodyHTML}</div><div class="mfoot"></div>`;
+  const foot = box.querySelector(".mfoot");
+  (actions || [{label:"关闭"}]).forEach(a => {
+    const b = document.createElement("button");
+    b.className = "btn" + (a.ghost ? " ghost" : "") + (a.danger ? " danger" : "");
+    b.textContent = a.label;
+    b.onclick = () => { const keep = a.onClick && a.onClick(box); if (!keep) closeModal(); };
+    foot.appendChild(b);
+  });
+  $("#modalMask").classList.add("show");
+}
+function closeModal(){ $("#modalMask").classList.remove("show"); }
+$("#modalMask").addEventListener("click", e => { if (e.target.id === "modalMask") closeModal(); });
+
+/* ── 备份 ── */
+function backup(reason){
+  try {
+    const snap = { ts: Date.now(), reason, data: { members, config, ticketMap, partnerGroups } };
+    const list = store.read("rc_backups", []);
+    list.unshift(snap);
+    while (list.length > 5 || JSON.stringify(list).length > 1048576) list.pop();
+    store.write("rc_backups", list);
+  } catch(e){}
+}
+function saveMembers(){ store.write("rc_members", members); }
+function saveGroups(){ store.write("rc_partner_groups", partnerGroups); }
+
+/* ═══════════ 页签切换 ═══════════ */
+$("#tabBtnMembers").onclick = () => switchTab(true);
+$("#tabBtnGroup").onclick = () => switchTab(false);
+function switchTab(memberTab){
+  $("#tabMembers").style.display = memberTab ? "" : "none";
+  $("#tabGroup").style.display = memberTab ? "none" : "";
+  $("#tabBtnMembers").classList.toggle("active", memberTab);
+  $("#tabBtnGroup").classList.toggle("active", !memberTab);
+}
+
+/* ═══════════ 页签一：成员明细 ═══════════ */
+const ratingSel = $("#memberRatingFilter");
+RATINGS.concat(["3+"]).forEach(r => { if (![...ratingSel.options].some(o => o.value === r)) { const o = document.createElement("option"); o.value = r; o.textContent = r; ratingSel.appendChild(o); } });
+{ const o = document.createElement("option"); o.value = "__none"; o.textContent = "未评级"; ratingSel.appendChild(o); }
+
+$("#btnImportMembers").onclick = () => { if (checkXLSX()) $("#fileMembers").click(); };
+$("#fileMembers").onchange = e => { const f = e.target.files[0]; if (f) importMembers(f); e.target.value = ""; };
+function checkXLSX(){ if (typeof XLSX === "undefined"){ toast("Excel 解析组件（CDN）加载失败，请检查网络后刷新页面", "err"); return false; } return true; }
+
+function importMembers(file){
+  const reader = new FileReader();
+  reader.onload = ev => {
+    try {
+      const wb = XLSX.read(new Uint8Array(ev.target.result), { type: "array" });
+      const parsed = parseMemberWorkbook(wb);
+      if (!parsed.rows.length) { openModal("导入失败", `<div class="errlist">${parsed.anomalies.map(esc).join("<br>")}</div>`); return; }
+      const { list, stats } = mergeMembers(members, parsed.rows);
+      const renameHtml = stats.renamedList.length
+        ? `<div class="errlist" style="background:#fff8e1;border-color:#ffe082"><b>昵称变更 ${stats.renamed} 人：</b><ul>${stats.renamedList.slice(0,10).map(s=>`<li>${esc(s)}</li>`).join("")}${stats.renamedList.length>10?`<li>…等 ${stats.renamedList.length} 人</li>`:""}</ul></div>` : "";
+      const anomHtml = parsed.anomalies.length
+        ? `<div class="errlist"><b>异常行提示：</b><ul>${parsed.anomalies.slice(0,8).map(s=>`<li>${esc(s)}</li>`).join("")}${parsed.anomalies.length>8?`<li>…等 ${parsed.anomalies.length} 条</li>`:""}</ul></div>` : "";
+      openModal("导入预览", `
+        <p>文件共解析 <b>${parsed.rows.length}</b> 条成员记录：</p>
+        <p style="margin:8px 0">新增 <b style="color:#2e7d32">${stats.added}</b> 人　更新 <b>${stats.updated}</b> 人　昵称变更 <b style="color:#b5673c">${stats.renamed}</b> 人</p>
+        ${renameHtml}${anomHtml}
+        <p class="muted">写入前会自动备份当前成员库；以玩聚号为唯一键合并，不会清空已有数据。</p>`,
+        [{ label:"取消", ghost:true },
+         { label:"确认写入", onClick(){ backup("导入成员表前"); members = list; saveMembers(); renderMembers(); toast(`已导入：新增 ${stats.added}，更新 ${stats.updated}，改名 ${stats.renamed}`, "ok"); } }]);
+    } catch(err){ openModal("导入失败", `<div class="errlist"><b>${esc(err.message)}</b><br>请确认是微信小程序导出的成员表（.xls/.xlsx）</div>`); }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+function renderMembers(){
+  const q = $("#memberSearch").value.trim().toLowerCase();
+  const rf = ratingSel.value, gf = $("#memberGenderFilter").value;
+  const list = members.filter(m => {
+    if (q && !(String(m.nickname||"").toLowerCase().includes(q) || (m.pastNicknames||[]).some(n=>String(n).toLowerCase().includes(q)) || String(m.playId).includes(q))) return false;
+    if (rf === "__none" && m.rating) return false;
+    if (rf && rf !== "__none" && m.rating !== rf) return false;
+    if (gf && m.gender !== gf) return false;
+    return true;
+  }).sort((a,b) => (b.joinCount||0) - (a.joinCount||0));
+  const unrated = members.filter(m => !m.rating).length;
+  $("#memberStats").textContent = `共 ${members.length} 人（未评级 ${unrated} 人）　当前显示 ${list.length} 人`;
+  $("#memberTable tbody").innerHTML = list.map(m => {
+    const past = (m.pastNicknames && m.pastNicknames.length) ? `<div class="muted">曾用：${esc(m.pastNicknames.join("、"))}</div>` : "";
+    const rating = m.rating ? m.rating : `<span class="chip warn">未评级</span>`;
+    const sel = `<select data-id="${esc(m.playId)}" class="ratingSel">` +
+      `<option value="">未评级</option>` + RATINGS.map(r => `<option value="${r}" ${m.rating===r?"selected":""}>${r}</option>`).join("") + `</select>`;
+    return `<tr><td>${esc(m.playId)}</td><td><b>${esc(m.nickname)}</b>${past}</td><td class="${m.gender==="女"?"female":m.gender==="男"?"male":"muted"}">${esc(m.gender)}</td><td>${sel || rating}</td><td class="muted">${esc(m.selfLevel||"—")}</td><td class="muted">${esc(m.tag||"—")}</td><td class="muted">${m.joinCount||0} / ${m.cancelCount||0}</td><td class="muted">${esc(m.lastJoinAt||"—")}</td></tr>`;
+  }).join("") || `<tr><td colspan="8" class="empty">暂无成员，请先导入成员表</td></tr>`;
+  $$("#memberTable .ratingSel").forEach(sel => sel.onchange = () => {
+    const m = members.find(x => String(x.playId) === sel.dataset.id);
+    if (m) { m.rating = sel.value || null; m.updatedAt = Date.now(); saveMembers(); }
+  });
+}
+$("#memberSearch").oninput = renderMembers;
+ratingSel.onchange = renderMembers;
+$("#memberGenderFilter").onchange = renderMembers;
+
+$("#btnExportMembers").onclick = () => {
+  if (!members.length) { toast("成员库为空", "err"); return; }
+  const aoa = [["玩聚号","昵称","过往昵称","性别","羽毛球等级(人工)","自评水平","羽毛球标签","参与次数","取消次数","最后参与时间"]];
+  members.slice().sort((a,b)=>num2(a.playId)-num2(b.playId)).forEach(m => aoa.push([m.playId, m.nickname, (m.pastNicknames||[]).join("、"), m.gender, m.rating||"", m.selfLevel||"", m.tag||"", m.joinCount||0, m.cancelCount||0, m.lastJoinAt||""]));
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws["!cols"] = [{wch:10},{wch:16},{wch:24},{wch:5},{wch:12},{wch:12},{wch:14},{wch:8},{wch:8},{wch:12}];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "成员明细");
+  XLSX.writeFile(wb, `成员明细_${todayStr()}.xlsx`);
+  toast("已导出成员明细", "ok");
+};
+function num2(id){ return parseInt(String(id).replace(/^0+/,"")||"0",10); }
+function todayStr(){ const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; }
+
+/* ═══════════ 页签二：活动分组 ═══════════ */
+$$(".stepper button").forEach(b => b.onclick = () => gotoStep(+b.dataset.step));
+function gotoStep(n){
+  [1,2,3,4].forEach(i => { $("#step"+i).style.display = i === n ? "" : "none"; });
+  $$(".stepper button").forEach(b => {
+    const s = +b.dataset.step;
+    b.classList.toggle("active", s === n);
+    b.classList.toggle("done", s < n);
+  });
+  if (n === 2) renderPartners();
+  if (n === 3) renderTickets();
+  if (n === 4) renderResult();
+}
+
+/* ── 步骤1：报名表 ── */
+$("#btnImportReg").onclick = () => { if (checkXLSX()) $("#fileReg").click(); };
+$("#fileReg").onchange = e => { const f = e.target.files[0]; if (f) importReg(f); e.target.value = ""; };
+$("#btnClearReg").onclick = () => openModal("清空报名数据", "<p>将清空本次报名表、搭子绑定与分组结果（成员库不受影响），继续？</p>",
+  [{label:"取消",ghost:true},{label:"确认清空",danger:true,onClick(){ reg=null; localStorage.removeItem("rc_reg"); partnerGroups=[]; crossDecisions={}; allowOverflow=false; lastResult=null; saveGroups(); renderReg(); renderPartners(); renderTickets(); renderResult(); toast("已清空"); }}]);
+
+function importReg(file){
+  const reader = new FileReader();
+  reader.onload = ev => {
+    try {
+      const wb = XLSX.read(new Uint8Array(ev.target.result), { type: "array" });
+      const parsed = parseRegistrationWorkbook(wb);
+      if (!parsed.participants.length && !parsed.waitlist.length) { openModal("导入失败", `<div class="errlist">${parsed.anomalies.map(esc).join("<br>")}</div>`); return; }
+      reg = { ...parsed, fileName: file.name };
+      store.write("rc_reg", reg);
+      crossDecisions = {}; allowOverflow = false; lastResult = null;
+      partnerGroups = partnerGroups.filter(g => g.memberIds.every(id => allRegIds().includes(id)));
+      saveGroups();
+      renderReg();
+      const msgs = [];
+      if (parsed.dedup.count) msgs.push(`去重 ${parsed.dedup.count} 条重复报名（如 ${parsed.dedup.samples.join("、")}）`);
+      msgs.push(`已报名 ${parsed.participants.length} 人，候补 ${parsed.waitlist.length} 人`);
+      toast(msgs.join("；"), "ok");
+      gotoStep(1);
+    } catch(err){ openModal("导入失败", `<div class="errlist"><b>${esc(err.message)}</b><br>请确认是小程序导出的报名表</div>`); }
+  };
+  reader.readAsArrayBuffer(file);
+}
+function allRegIds(){ return reg ? [...reg.participants, ...reg.waitlist].map(r => r.playId) : []; }
+
+function memberOf(playId){ return members.find(m => String(m.playId) === String(playId)); }
+function regRating(playId){ const m = memberOf(playId); return m ? (m.rating || null) : undefined; } // undefined=未匹配 null=未评级
+
+function renderReg(){
+  const has = !!reg;
+  $("#btnClearReg").style.display = has ? "" : "none";
+  $("#regFileHint").textContent = has ? `已上传：${reg.fileName}` : "尚未上传";
+  $("#activityCard").style.display = has ? "" : "none";
+  $("#regToolbar").style.display = has ? "" : "none";
+  $("#regTableWrap").style.display = has ? "" : "none";
+  if (!has) return;
+  const a = reg.activity;
+  $("#activityCard").innerHTML = `<span>🏸 <b>${esc(a.title || "活动")}</b></span><span>开始：${esc(a.startTime||"—")}</span><span>结束：${esc(a.endTime||"—")}</span><span>组织者：${esc(a.organizer||"—")}</span>`;
+  const q = $("#regSearch").value.trim().toLowerCase();
+  const rows = [...reg.participants, ...reg.waitlist].filter(r => !q || r.nickname.toLowerCase().includes(q) || r.playId.includes(q) || r.ticket.toLowerCase().includes(q));
+  const unmatched = reg.participants.filter(r => !memberOf(r.playId)).length;
+  const unrated = reg.participants.filter(r => { const rr = regRating(r.playId); return rr === undefined || rr === null; }).length;
+  $("#regStats").textContent = `已报名 ${reg.participants.length}（未匹配 ${unmatched} / 无评级 ${unrated}）　候补 ${reg.waitlist.length}　${q ? "筛选 "+rows.length : ""}`;
+  $("#regTable tbody").innerHTML = rows.map(r => {
+    const m = memberOf(r.playId);
+    const rr = regRating(r.playId);
+    const ratingHtml = rr === undefined ? `<span class="chip warn">未匹配</span>` : (rr === null ? `<span class="chip warn">未评级</span>` : esc(rr));
+    const past = m && m.pastNicknames && m.pastNicknames.length ? `<div class="muted">曾用：${esc(m.pastNicknames.join("、").slice(0,30))}</div>` : "";
+    const st = r.status === "候补" ? `<span class="chip info">候补</span>` : (r.excluded ? `<span class="chip warn">已排除</span>` : `<span class="chip ok">已报名</span>`);
+    const op = r.status === "候补"
+      ? `<button class="btn small ghost" data-act="promote" data-id="${esc(r.regId)}">提升为正式</button>`
+      : (r.excluded
+        ? `<button class="btn small ghost" data-act="restore" data-id="${esc(r.regId)}">恢复</button>`
+        : `<button class="btn small ghost" data-act="exclude" data-id="${esc(r.regId)}">排除</button><button class="btn small ghost" data-act="wait" data-id="${esc(r.regId)}">转候补</button>`);
+    const ticketShort = r.ticket.length > 22 ? r.ticket.slice(0,22)+"…" : r.ticket;
+    const pastNick = (m && m.pastNicknames && m.pastNicknames.length) ? esc(m.pastNicknames.join("、").slice(0,24)) : "—";
+    return `<tr><td>${esc(r.playId)}</td><td class="muted">${esc(r.regId)}</td><td><b>${esc(r.nickname)}</b>${past}</td><td class="muted">${pastNick}</td><td class="${r.gender==="女"?"female":"male"}">${esc(r.gender)}</td><td>${ratingHtml}</td><td title="${esc(r.ticket)}">${esc(ticketShort)}</td><td>${st}</td><td>${op}</td></tr>`;
+  }).join("");
+  $$("#regTable tbody button").forEach(b => b.onclick = () => {
+    let r = [...reg.participants, ...reg.waitlist].find(x => String(x.regId) === b.dataset.id);
+    if (!r) return;
+    if (b.dataset.act === "exclude") r.excluded = true;
+    if (b.dataset.act === "restore") r.excluded = false;
+    if (b.dataset.act === "wait") {
+      reg.participants = reg.participants.filter(x => x !== r);
+      r.status = "候补"; r.excluded = false; reg.waitlist.push(r);
+    }
+    if (b.dataset.act === "promote") {
+      reg.waitlist = reg.waitlist.filter(x => x !== r);
+      r.status = "已报名"; r.excluded = false; reg.participants.push(r);
+    }
+    store.write("rc_reg", reg);
+    renderReg();
+  });
+}
+$("#regSearch").oninput = renderReg;
+
+/* ── 步骤2：搭子绑定 ── */
+$("#btnAddGroup").onclick = () => {
+  if (!reg) { toast("请先上传报名表", "err"); return; }
+  openGroupEditor(null);
+};
+function renderPartners(){
+  if (!reg) { $("#pgroups").innerHTML = `<div class="empty">请先在步骤①上传报名表</div>`; return; }
+  const active = reg.participants.filter(p => !p.excluded);
+  if (!partnerGroups.length) { $("#pgroups").innerHTML = `<div class="empty">暂无搭子组。点击「新增搭子组」，把已私聊报备的组合绑定起来（分组时同池且相邻，不会被拆开）。</div>`; return; }
+  $("#pgroups").innerHTML = partnerGroups.map(g => {
+    const mem = g.memberIds.map(id => active.find(p => p.playId === id)).filter(Boolean);
+    const vals = mem.map(p => ratingValue(regRating(p.playId))).filter(v => v !== null);
+    const diff = vals.length >= 2 ? Math.max(...vals) - Math.min(...vals) : 0;
+    const warn = diff > 0.5 + EPS ? `<span class="chip warn">组内评级差 ${diff.toFixed(1)}，分组前需确认</span>` : "";
+    return `<div class="pgroup" data-gid="${esc(g.id)}"><div class="ghead"><b>${esc(g.name)}</b>${warn}
+      <span style="flex:1"></span><button class="btn small ghost" data-act="edit">编辑</button><button class="btn small danger" data-act="del">删除</button></div>
+      <div class="memberchips">${mem.map(p => `<span class="mchip">${esc(p.nickname)}<span class="muted">${esc(regRating(p.playId)||"?")}</span></span>`).join("") || '<span class="muted">（空组）</span>'}</div></div>`;
+  }).join("");
+  $$("#pgroups .pgroup").forEach(el => {
+    const g = partnerGroups.find(x => String(x.id) === el.dataset.gid);
+    el.querySelector('[data-act=edit]').onclick = () => openGroupEditor(g);
+    el.querySelector('[data-act=del]').onclick = () => openModal("删除搭子组", `确认删除「${esc(g.name)}」？`, [{label:"取消",ghost:true},{label:"删除",danger:true,onClick(){ partnerGroups = partnerGroups.filter(x => x !== g); saveGroups(); renderPartners(); }}]);
+  });
+}
+function openGroupEditor(g){
+  const active = reg.participants.filter(p => !p.excluded);
+  const selected = new Set(g ? g.memberIds : []);
+  openModal(g ? "编辑搭子组" : "新增搭子组", `
+    <label class="field"><span>组名（如：A组）</span><input type="text" id="gName" value="${esc(g ? g.name : "搭子组"+(partnerGroups.length+1))}"></label>
+    <div style="margin-top:10px"><input type="text" id="gSearch" placeholder="搜索昵称/玩聚号…" style="width:100%"></div>
+    <div id="gSelChips" style="margin:8px 0"></div>
+    <div id="gList" style="max-height:300px; overflow:auto; border:1px solid var(--line); border-radius:8px"></div>`,
+    [{label:"取消",ghost:true},{label:"保存",onClick(box){
+      const name = box.querySelector("#gName").value.trim() || "未命名组";
+      const ids = [...selected];   // 从已选集合读取（搜索过滤会重建列表 DOM，不能从勾选框读）
+      if (ids.length < 2) { toast("搭子组至少需要 2 人", "err"); return true; }
+      if (g) { g.name = name; g.memberIds = ids; } else partnerGroups.push({ id: Date.now(), name, memberIds: ids });
+      saveGroups(); renderPartners(); toast("已保存搭子组", "ok");
+    }}]);
+  const box = $("#modalBox");
+  const renderList = () => {
+    const q = box.querySelector("#gSearch").value.trim().toLowerCase();
+    box.querySelector("#gList").innerHTML = active
+      .filter(p => !q || p.nickname.toLowerCase().includes(q) || p.playId.includes(q))
+      .map(p => `<label style="display:flex; gap:8px; align-items:center; padding:5px 10px; border-bottom:1px solid var(--line); cursor:pointer">
+        <input type="checkbox" value="${esc(p.playId)}" ${selected.has(p.playId)?"checked":""}>
+        <b>${esc(p.nickname)}</b><span class="muted">${esc(p.playId)} · ${esc(regRating(p.playId)||"未评级")} · ${esc(p.gender)}</span>
+        <span class="muted" style="flex:1; text-align:right">${esc(p.ticket.slice(0,18))}</span></label>`).join("");
+    box.querySelectorAll("#gList input").forEach(i => i.onchange = () => { i.checked ? selected.add(i.value) : selected.delete(i.value); renderChips(); });
+  };
+  const renderChips = () => {
+    box.querySelector("#gSelChips").innerHTML = `<span class="muted">已选 ${selected.size} 人：</span>` +
+      [...selected].map(id => { const p = active.find(x => x.playId === id); return p ? `<span class="mchip">${esc(p.nickname)}<span class="x" data-id="${esc(id)}">×</span></span>` : ""; }).join("");
+    box.querySelectorAll("#gSelChips .x").forEach(x => x.onclick = () => { selected.delete(x.dataset.id); renderList(); renderChips(); });
+  };
+  box.querySelector("#gSearch").oninput = renderList;
+  renderList(); renderChips();
+}
+
+/* ── 步骤3：票种与场地 ── */
+function renderTickets(){
+  if (!reg) { $("#ticketList").innerHTML = `<div class="empty">请先上传报名表</div>`; return; }
+  const tickets = [...new Set([...reg.participants, ...reg.waitlist].map(r => r.ticket))];
+  $("#ticketList").innerHTML = tickets.map((t, i) => {
+    const cnt = reg.participants.filter(p => p.ticket === t && !p.excluded).length;
+    const type = ticketMap[t] || suggestSessionType(t);
+    return `<div class="ticketcfg" data-ticket="${esc(t)}">
+      <div class="tname">${i+1}. ${esc(t)}　<span class="chip info">${cnt} 人已报名</span></div>
+      <div class="trow">
+        <label class="field"><span>场次类型</span><select class="tType">${Object.keys(SESSIONS).map(k => `<option value="${k}" ${type===k?"selected":""}>${SESSIONS[k].label}</option>`).join("")}</select></label>
+        <label class="field f-count"><span>场地数</span><input type="number" class="tCount" min="1" value="1"></label>
+        <label class="field" style="flex:1; min-width:240px"><span>场地名（逗号分隔，留空自动编号；如 11号场,12号场）</span><input type="text" class="tCourts" placeholder="留空自动：场地1、场地2…"></label>
+      </div></div>`;
+  }).join("");
+  $$("#ticketList .ticketcfg").forEach(el => {
+    const t = el.dataset.ticket;
+    const typeSel = el.querySelector(".tType");
+    typeSel.onchange = () => { ticketMap[t] = typeSel.value; store.write("rc_ticket_map", ticketMap); };
+  });
+}
+function collectTicketConfig(){
+  const types = {}, courts = {};
+  if (!reg) return { types, courts };
+  $$("#ticketList .ticketcfg").forEach(el => {
+    const t = el.dataset.ticket;
+    const type = el.querySelector(".tType").value;
+    types[t] = type;
+    ticketMap[t] = type;
+    const raw = el.querySelector(".tCourts").value.trim();
+    const cnt = Math.max(1, parseInt(el.querySelector(".tCount").value) || 1);
+    const names = raw ? raw.split(/[,，、\s]+/).filter(Boolean) : autoCourtNames(cnt, type);
+    courts[t] = names;
+  });
+  store.write("rc_ticket_map", ticketMap);
+  return { types, courts };
+}
+
+/* ── 校验 E01–E12 ── */
+function validateGrouping(){
+  const blocking = [], notes = [];
+  if (!reg) blocking.push({ code:"E01", msg:"尚未上传报名表", fix:"step1" });
+  if (!members.length) blocking.push({ code:"E02", msg:"成员库为空，请先在「俱乐部成员明细」导入成员表", fix:"members" });
+  if (!reg || !members.length) return { blocking, confirmations: [] };
+
+  const active = reg.participants.filter(p => !p.excluded);
+  const byId = new Map(active.map(p => [p.playId, p]));
+  const { types } = collectTicketConfig();
+
+  const unmatched = active.filter(p => !memberOf(p.playId));
+  const unrated = active.filter(p => { const rr = regRating(p.playId); return rr === undefined || rr === null; });
+  const unmatchedNoUnrated = unmatched.filter(p => !unrated.includes(p));
+  if (unmatched.length) blocking.push({ code:"E03", msg:`${unmatched.length} 名报名者不在成员库（可在弹窗中一键补录）：${unmatched.map(p=>p.nickname).slice(0,8).join("、")}${unmatched.length>8?"…":""}`, rows: unmatched, kind:"unmatched" });
+  const unratedKnown = unrated.filter(p => memberOf(p.playId));
+  if (unratedKnown.length) blocking.push({ code:"E04", msg:`${unratedKnown.length} 名报名者未评级：${unratedKnown.map(p=>p.nickname).slice(0,8).join("、")}${unratedKnown.length>8?"…":""}`, rows: unratedKnown, kind:"unrated" });
+
+  for (const t in types) {
+    if (!types[t]) blocking.push({ code:"E09", msg:`票种「${t}」未选择场次类型` });
+    if (types[t]) {
+      const el = $$("#ticketList .ticketcfg").find(x => x.dataset.ticket === t);
+      const rawNames = el && el.querySelector(".tCourts") ? el.querySelector(".tCourts").value.trim() : "";
+      const cnt = el && el.querySelector(".tCount") ? (parseInt(el.querySelector(".tCount").value) || 0) : 0;
+      if (!rawNames && cnt < 1) blocking.push({ code:"E10", msg:`票种「${t.slice(0,30)}」请至少配置 1 块场地` });
+    }
+  }
+
+  const confirmations = [];
+  for (const g of partnerGroups) {
+    const inActive = g.memberIds.filter(id => byId.has(id));
+    const missing = g.memberIds.length - inActive.length;
+    if (missing > 0) blocking.push({ code:"E05", msg:`搭子组「${g.name}」有 ${missing} 名成员不在本次有效报名中，请调整绑定` });
+    if (inActive.length >= 2) {
+      const sts = [...new Set(inActive.map(id => types[byId.get(id).ticket]))];
+      if (sts.length > 1 || sts[0] == null) blocking.push({ code:"E06", msg:`搭子组「${g.name}」成员票种对应场次类型不一致（${sts.map(s=>s?SESSIONS[s].label:"未配置").join(" / ")}），无法同池` });
+      else {
+        const vals = inActive.map(id => ratingValue(regRating(id))).filter(v => v !== null);
+        if (sts[0] !== "FREE" && vals.length >= 2 && Math.max(...vals) - Math.min(...vals) > 0.5 + EPS && crossDecisions[g.id] !== "split")
+          confirmations.push({ code:"E07", group: g, maxV: Math.max(...vals), minV: Math.min(...vals) });
+      }
+    }
+  }
+
+  const malesInNS = active.filter(p => types[p.ticket] === "NS" && p.gender === "男");
+  if (malesInNS.length) blocking.push({ code:"E08", msg:`${malesInNS.length} 名男生报名了女双票种：${malesInNS.map(p=>p.nickname).join("、")}`, rows: malesInNS, kind:"nsMale" });
+
+  return { blocking, confirmations };
+}
+
+/* ── 开始分组（含 E01–E12 交互流程） ── */
+$("#btnDoGroup").onclick = () => {
+  if (!reg) { toast("请先上传报名表", "err"); return; }
+  const v = validateGrouping();
+  // 快捷修复类：E03/E04/E08
+  const fixables = v.blocking.filter(b => b.rows);
+  const hards = v.blocking.filter(b => !b.rows);
+  if (hards.length) { showBlocking(hards); return; }
+  if (fixables.length) { showQuickFix(fixables, v); return; }
+  proceedConfirmations(v.confirmations, []);
+};
+function showBlocking(list){
+  openModal("无法开始分组", list.map(b => `<div class="errlist"><b>${esc(b.code)}</b> ${esc(b.msg)}</div>`).join(""),
+    [{ label:"知道了", onClick(){ if (list.some(b => b.fix === "step1")) gotoStep(1); }}]);
+}
+function showQuickFix(fixables, v){
+  const unmatched = fixables.find(b => b.kind === "unmatched");
+  const unrated = fixables.find(b => b.kind === "unrated");
+  const nsMale = fixables.find(b => b.kind === "nsMale");
+  let html = "";
+  if (unmatched) html += `<div class="errlist"><b>E03 未匹配成员（${unmatched.rows.length} 人）——选择评级后一键补录进成员库：</b>
+    ${unrated && unmatched.rows === unrated.rows ? "" : unmatched.rows.map(p => `<div style="display:flex;gap:8px;align-items:center;padding:4px 0"><span style="flex:1">${esc(p.nickname)}（${esc(p.playId)}·${esc(p.gender)}）</span><select class="qfRating" data-id="${esc(p.playId)}" data-nick="${esc(p.nickname)}" data-gender="${esc(p.gender)}"><option value="">未评级</option>${RATINGS.map(r=>`<option>${r}</option>`).join("")}</select></div>`).join("")}</div>`;
+  if (unrated) {
+    const rows = unrated.rows.filter(p => unmatched && unmatched.rows.includes(p) ? false : true);
+    if (rows.length) html += `<div class="errlist" style="background:#fff8e1;border-color:#ffe082"><b>E04 未评级成员（${rows.length} 人）——请补选评级：</b>
+      ${rows.map(p => `<div style="display:flex;gap:8px;align-items:center;padding:4px 0"><span style="flex:1">${esc(p.nickname)}（${esc(p.playId)}）</span><select class="qfRating2" data-id="${esc(p.playId)}"><option value="">未评级</option>${RATINGS.map(r=>`<option>${r}</option>`).join("")}</select></div>`).join("")}</div>`;
+  }
+  if (nsMale) html += `<div class="errlist"><b>E08 女双票种含男生（${nsMale.rows.length} 人）：</b>${nsMale.rows.map(p=>esc(p.nickname)).join("、")}<br><label style="margin-top:6px;display:flex;gap:6px;align-items:center"><input type="checkbox" id="qfExcludeMales" checked>将这些男生标记为「已排除」（不出现在任何场次）</label></div>`;
+  openModal("分组前检查", html, [
+    { label:"取消", ghost:true },
+    { label:"应用并继续", onClick(box){
+      const emptySel = [...box.querySelectorAll("select")].some(s => !s.value);
+      const stillUnratedRows = [];
+      box.querySelectorAll(".qfRating, .qfRating2").forEach(s => {
+        const id = s.dataset.id;
+        let m = members.find(x => String(x.playId) === id);
+        if (!m) { m = { playId:id, nickname:s.dataset.nick || id, pastNicknames:[], gender:s.dataset.gender || "未知", rating:null, updatedAt:Date.now() }; members.push(m); }
+        if (s.value) m.rating = s.value;
+        else stillUnratedRows.push(m.nickname);
+      });
+      if (emptySel && stillUnratedRows.length) { toast(`仍有 ${stillUnratedRows.length} 人未评级（未评级不能分组）`, "err"); saveMembers(); renderMembers(); return true; }
+      if (box.querySelector("#qfExcludeMales") && box.querySelector("#qfExcludeMales").checked)
+        nsMale && nsMale.rows.forEach(p => p.excluded = true);
+      store.write("rc_reg", reg);
+      saveMembers(); renderMembers(); renderReg();
+      const v2 = validateGrouping();
+      const hards = v2.blocking.filter(b => !b.rows);
+      if (hards.length) { setTimeout(()=>showBlocking(hards), 120); return false; }
+      proceedConfirmations(v2.confirmations, []);
+      toast("检查已应用", "ok");
+    }}]);
+}
+function proceedConfirmations(remaining, resolved){
+  if (!remaining.length) { proceedOverflow(resolved); return; }
+  const c = remaining[0];
+  if (crossDecisions[c.group.id] === "keep") { resolved.push(c); return proceedConfirmations(remaining.slice(1), resolved); }
+  openModal("E07 跨档搭子确认", `
+    <p>搭子组「<b>${esc(c.group.name)}</b>」组内评级差较大（最高 ${fmtLevel(c.maxV)} / 最低 ${fmtLevel(c.minV)}）。</p>
+    <p style="margin:8px 0">同打体验一般。建议提前与本人沟通；<b>保留</b>则整组按组内最高评级 ${fmtLevel(c.maxV)} 入池并在结果中标注「跨档搭子」。</p>
+    <p class="muted">成员：${c.group.memberIds.map(id => { const p = reg.participants.find(x=>x.playId===id); return p ? `${esc(p.nickname)}(${esc(regRating(id)||"?")})` : ""; }).filter(Boolean).join("、")}</p>`,
+    [{ label:"拆分绑定", ghost:true, onClick(){ crossDecisions[c.group.id] = "split"; resolved.push(c); setTimeout(()=>proceedConfirmations(remaining.slice(1), resolved), 100); return false; }},
+     { label:"保留绑定", onClick(){ crossDecisions[c.group.id] = "keep"; resolved.push(c); setTimeout(()=>proceedConfirmations(remaining.slice(1), resolved), 100); return false; }}]);
+}
+function proceedOverflow(resolved){
+  const { types, courts } = collectTicketConfig();
+  const poolSizes = config.poolSizes;
+  const sessCount = { MX:0, HS:0, NS:0, FREE:0 };
+  const active = reg.participants.filter(p => !p.excluded);
+  for (const p of active) { const st = types[p.ticket]; if (sessCount[st] !== undefined) sessCount[st]++; }
+  const overflowSess = [];
+  for (const st of ["MX","HS","NS","FREE"]) {
+    if (st === "FREE" && !(poolSizes.FREE > 0)) continue;   // 自由场不限容量时不做超员检查
+    let cap = 0;
+    for (const t in types) if (types[t] === st) cap += (courts[t] || []).length * (poolSizes[st] || 0);
+    if (poolSizes[st] > 0 && sessCount[st] > cap) overflowSess.push({ st, count: sessCount[st], cap });
+  }
+  if (overflowSess.length && !allowOverflow) {
+    openModal("E11 报名超员", overflowSess.map(o => `<div class="errlist"><b>${SESSIONS[o.st].label}</b>：报名 ${o.count} 人 > 场地容量 ${o.cap} 人。<br>默认按<b>报名先后</b>保留 ${o.cap} 人，其余转候补（可在报名列表手动调整后重试）。</div>`).join(""),
+      [{ label:"返回调整场地", ghost:true },
+       { label:"按报名顺序保留并继续", onClick(){ allowOverflow = true; doGrouping(); }}]);
+    return;
+  }
+  doGrouping();
+}
+function doGrouping(){
+  const { types, courts } = collectTicketConfig();
+  const input = {
+    // 参赛者关联成员库评级（核心算法约定 participants 自带 rating）
+    participants: reg.participants.map(p => ({ ...p, rating: memberOf(p.playId) ? regRating(p.playId) : null })),
+    ticketTypes: types,
+    ticketCourts: courts,
+    partnerGroups,
+    decisions: crossDecisions,
+    allowOverflow,
+    poolSizes: config.poolSizes
+  };
+  try {
+    const result = buildGrouping(input);
+    const inv = checkInvariants(result, input);
+    if (inv.length) { openModal("算法自检失败（不应出现）", inv.slice(0,8).map(esc).join("<br>")); return; }
+    lastResult = { ts: Date.now(), activity: reg.activity, result };
+    history.unshift(lastResult); history = history.slice(0, 10);
+    store.write("rc_results", history);
+    renderResult();
+    gotoStep(4);
+    toast(`分组完成：${result.stats.pooled} 人入池，警示 ${result.warnings.length} 条`, "ok");
+  } catch(err){ openModal("分组出错", `<div class="errlist"><b>${esc(err.message)}</b><br>${esc(err.stack||"").split("\n")[1]||""}</div>`); }
+}
+
+/* ── 步骤4：结果展示 ── */
+function renderResult(){
+  const r = lastResult && lastResult.result;
+  if (!r) { $("#resultSummary").innerHTML = `<div class="empty">尚未分组。请完成步骤①–③后点击「开始分组」。</div>`; $("#resultWarnings").innerHTML=""; $("#courtsView").innerHTML=""; renderHistory(); return; }
+  const a = lastResult.activity || {};
+  $("#resultSummary").innerHTML = `<div class="sumline">
+    <span>🏸 <b>${esc(a.title||"活动")}</b></span><span>有效报名 <b>${r.stats.totalActive}</b> 人</span>
+    <span>入池 <b>${r.stats.pooled}</b> 人</span><span>溢出转候补 <b>${r.stats.overflow}</b></span>
+    <span>未成池/待处理 <b>${r.stats.unassigned + r.stats.manual}</b></span><span>生成于 ${new Date(lastResult.ts).toLocaleString()}</span></div>`;
+  const w = [];
+  if (r.warnings.length) w.push(`<div class="warnbox"><b>⚠ 警示（${r.warnings.length}）：</b><ul style="margin:4px 0 0 18px">${r.warnings.map(x=>`<li>${esc(x.msg)}</li>`).join("")}</ul></div>`);
+  if (r.overflow.length) w.push(`<div class="warnbox"><b>溢出/候补（${r.overflow.length}）：</b>${r.overflow.map(x=>esc(x.p.nickname)).join("、")}</div>`);
+  if (r.unassigned.length) w.push(`<div class="warnbox"><b>未成池/待处理（${r.unassigned.length}）：</b>${r.unassigned.map(x=>`${esc(x.p.nickname)}（${esc(x.reason)}）`).join("；")}</div>`);
+  if (r.manual.length) w.push(`<div class="warnbox"><b>跨档搭子待人工放置（${r.manual.length}）：</b>${r.manual.map(x=>`「${esc(x.unit.groupName)}」（${esc(x.reason)}）`).join("；")}</div>`);
+  $("#resultWarnings").innerHTML = w.join("");
+  $("#courtsView").innerHTML = r.courts.map(c => `
+    <div class="court ${({MX:"mx",HS:"hs",NS:"ns",FREE:"free"})[c.sessionType]}">
+      <div class="ctitle"><span>${esc(c.name)} · ${esc(c.label)}</span><span class="muted">${c.members.length}人${c.underfull?" ⚠未满池":""}</span></div>
+      <ul>${c.members.map(m => `<li><span class="grad">${m.gradient||""}</span><b>${esc(m.nickname)}</b>
+        <span class="${m.gender==="女"?"female":"male"}">${m.gender==="女"?"♀":"♂"}</span>
+        <span class="muted">${esc(m.rating||"")}</span>
+        ${m.groupName?`<span class="tag">${esc(m.groupName)}</span>`:""}
+        ${m.crossKept?`<span class="tag" style="background:#ffe9c8">跨档搭子</span>`:""}</li>`).join("")}</ul>
+    </div>`).join("");
+  renderHistory();
+}
+function renderHistory(){
+  $("#historyList").innerHTML = history.length ? history.map((h, i) => `
+    <div class="histitem"><span>#${i+1}　${esc((h.activity&&h.activity.title)||"活动").slice(0,40)}　入池 ${h.result.stats.pooled} 人</span>
+    <span><button class="btn small ghost" data-i="${i}">查看</button><button class="btn small ghost" data-exp="${i}">导出</button></span></div>`).join("")
+    : `<div class="muted">暂无历史</div>`;
+  $$("#historyList button").forEach(b => b.onclick = () => {
+    const i = b.dataset.i !== undefined ? +b.dataset.i : +b.dataset.exp;
+    lastResult = history[i]; renderResult();
+    if (b.dataset.exp !== undefined) exportResult();
+  });
+}
+$("#btnRegroup").onclick = () => gotoStep(3);
+$("#btnExportResult").onclick = () => { if (!lastResult) { toast("先完成分组", "err"); return; } exportResult(); };
+function exportResult(){
+  const { result: r, activity: a, ts } = lastResult;
+  const wb = XLSX.utils.book_new();
+  const overview = [["场地","类型","人数","等级分布","女生数","备注"],
+    ...r.courts.map(c => {
+      const dist = {}; let f = 0;
+      c.members.forEach(m => { dist[m.rating||"?"] = (dist[m.rating||"?"]||0)+1; if (m.gender==="女") f++; });
+      return [c.name, c.label, c.members.length, Object.entries(dist).map(([k,n])=>k+"×"+n).join(" "), f, c.underfull?"未满池":""]; }),
+    [], ["溢出/候补人数", r.overflow.length], ["未成池/待处理人数", r.unassigned.length + r.manual.length],
+    ["生成时间", new Date(ts).toLocaleString()], ["活动", (a&&a.title)||""]];
+  const ws1 = XLSX.utils.aoa_to_sheet(overview); ws1["!cols"] = [{wch:14},{wch:10},{wch:6},{wch:26},{wch:7},{wch:10}];
+  XLSX.utils.book_append_sheet(wb, ws1, "分组总览");
+  const list = [["场地","类型","梯度","轮转序","昵称","评级","性别","玩聚号","标记"]];
+  r.courts.forEach(c => c.members.forEach(m => list.push([c.name, c.label, m.gradient||"", m.rotation||"", m.nickname, m.rating||"", m.gender, m.playId, [m.groupName, m.crossKept?"跨档搭子":""].filter(Boolean).join("/") ])));
+  const ws2 = XLSX.utils.aoa_to_sheet(list); ws2["!cols"] = [{wch:12},{wch:9},{wch:6},{wch:7},{wch:16},{wch:6},{wch:6},{wch:11},{wch:12}];
+  XLSX.utils.book_append_sheet(wb, ws2, "各场地名单");
+  const warn = [["类型","内容"]];
+  r.warnings.forEach(x => warn.push(["警示", x.msg]));
+  r.overflow.forEach(x => warn.push(["溢出/候补", `${x.p.nickname}（${x.p.playId}）`]));
+  r.unassigned.forEach(x => x.p && warn.push(["未成池/待处理", `${x.p.nickname}（${x.p.playId}）：${x.reason}`]));
+  r.manual.forEach(x => warn.push(["跨档搭子", `${x.unit.groupName}：${x.reason}`]));
+  const ws3 = XLSX.utils.aoa_to_sheet(warn); ws3["!cols"] = [{wch:14},{wch:70}];
+  XLSX.utils.book_append_sheet(wb, ws3, "候补与警示");
+  XLSX.writeFile(wb, `分组结果_${todayStr()}.xlsx`);
+  toast("已导出 Excel（3 个工作表）", "ok");
+}
+$("#btnCopyResult").onclick = () => {
+  if (!lastResult) { toast("先完成分组", "err"); return; }
+  const txt = buildCopyText();
+  navigator.clipboard.writeText(txt).then(() => toast("已复制，可粘贴到微信群", "ok"), () => {
+    openModal("复制结果文本", `<textarea style="width:100%;height:340px;font-size:12px" readonly>${esc(txt)}</textarea>`, [{label:"关闭"}]);
+  });
+};
+
+/* 复制文本：对齐组织者微信群公布格式（头部活动信息 + --(X男Y女)类型 X组 场地 块 + 尾部文案） */
+const DEFAULT_COPY_FOOTER = [
+  "以上是咱们这次的分组清单和轮转",
+  "微对抗和萌新养生：按照我们的安排进行轮转上场打球，不要随意串场，轮转结束后可以串场！",
+  "麻烦大家按照我们的安排上场打球，自由场拒绝霸场行为（打完一场要休息一场再上），有问题可以线下找牛气羊（17号场）协调！"
+].join("\n");
+function buildCopyText(){
+  const { result: r, activity: a } = lastResult;
+  const shortName = { MX: "萌新养生", HS: "微微对抗", NS: "女双对抗", FREE: "3+自由场" };
+  // 组字母：同场次内按顺序 A、B、C…
+  const seqCnt = {}, letterOf = new Map();
+  r.courts.forEach(c => { seqCnt[c.sessionType] = (seqCnt[c.sessionType] || 0) + 1; letterOf.set(c, String.fromCharCode(64 + seqCnt[c.sessionType])); });
+  // 场地名全部为「N号场」时按场地号排序（对齐"16号场…22号场"的习惯）；自动名（萌新1场等）保持场次分组顺序
+  const courtNo = c => { const m = String(c.name).trim().match(/^(\d+)\s*号场/); return m ? +m[1] : null; };
+  const ordered = r.courts.length && r.courts.every(c => courtNo(c) !== null)
+    ? r.courts.slice().sort((x, y) => courtNo(x) - courtNo(y)) : r.courts;
+  let txt = "";
+  const full = (a && (a.titleFull || a.title)) || "";
+  if (full.trim()) txt += full.trim() + "\n";
+  if (a && a.startTime) txt += `开始时间:${a.startTime}\n`;
+  if (a && a.endTime) txt += `结束时间:${a.endTime}\n`;
+  if (a && a.organizer) txt += `组织者:${a.organizer}\n`;
+  for (const c of ordered) {
+    const m = c.members.filter(x => x.gender === "男").length;
+    const f = c.members.filter(x => x.gender === "女").length;
+    txt += `\n--(${m}男${f}女)${shortName[c.sessionType]} ${letterOf.get(c)}组 ${c.name}\n`;
+    txt += c.members.map((x, i) => `${i + 1}. ${x.nickname}${x.gender === "女" ? " (女)🌹" : ""}`).join("\n") + "\n";
+  }
+  const pend = [];
+  if (r.overflow.length) pend.push(`候补（超员顺延）：${r.overflow.map(x => x.p.nickname).join("、")}`);
+  if (r.unassigned.length) pend.push(`待处理：${r.unassigned.filter(x => x.p).map(x => `${x.p.nickname}（${x.reason}）`).join("；")}`);
+  if (r.manual.length) pend.push(`跨档搭子待放置：${r.manual.map(x => x.unit.groupName).join("、")}`);
+  if (pend.length) txt += `\n——————\n${pend.join("\n")}\n`;
+  const footer = config.copyFooter != null ? config.copyFooter : DEFAULT_COPY_FOOTER;
+  if (footer && footer.trim()) txt += `\n${footer.trim()}\n`;
+  return txt;
+}
+
+/* ═══════════ 设置 / 云端同步 ═══════════ */
+$("#btnSettings").onclick = () => {
+  openModal("设置", `
+    <fieldset><legend>轮转池容量</legend><div class="trow" style="display:flex;gap:10px;flex-wrap:wrap">
+      ${["MX","HS","NS"].map(k => `<label class="field"><span>${SESSIONS[k].label}（人/场）</span><input type="number" id="ps_${k}" min="1" value="${config.poolSizes[k]}"></label>`).join("")}
+      <label class="field"><span>3+自由场（人/场，0=不限均分）</span><input type="number" id="ps_FREE" min="0" value="${config.poolSizes.FREE || 0}"></label>
+    </div></fieldset>
+    <fieldset><legend>数据管理</legend>
+      <div class="trow" style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn ghost small" id="setBackup">查看备份（${store.read("rc_backups",[]).length}）</button>
+        <button class="btn danger small" id="setClear">清空全部本地数据</button>
+      </div></fieldset>
+    <fieldset><legend>复制文本尾部文案（协调人/场地等信息变了在这里改）</legend>
+      <textarea id="copyFooter" style="width:100%;height:96px;font-size:12px">${esc(config.copyFooter != null ? config.copyFooter : DEFAULT_COPY_FOOTER)}</textarea>
+    </fieldset>`,
+    [{label:"取消",ghost:true},{label:"保存",onClick(box){
+      ["MX","HS","NS","FREE"].forEach(k => { const v = parseInt(box.querySelector("#ps_"+k).value); if (v >= (k === "FREE" ? 0 : 1)) config.poolSizes[k] = v; });
+      config.copyFooter = box.querySelector("#copyFooter").value;
+      store.write("rc_config", config); toast("设置已保存", "ok");
+    }}]);
+  $("#setBackup").onclick = () => { closeModal(); setTimeout(showBackups, 100); };
+  $("#setClear").onclick = () => {
+    openModal("清空全部本地数据", "<p style='color:#c62828'><b>将删除成员库、配置、搭子绑定与历史记录（会先自动备份）。</b>此操作不可撤销，确定？</p>",
+      [{label:"取消",ghost:true},{label:"确认清空",danger:true,onClick(){ backup("清空前"); ["rc_members","rc_config","rc_ticket_map","rc_partner_groups","rc_results"].forEach(k=>localStorage.removeItem(k)); location.reload(); }}]);
+  };
+};
+function showBackups(){
+  const list = store.read("rc_backups", []);
+  openModal("自动备份（最多5份）", list.length ? list.map((b,i) =>
+    `<div class="histitem"><span>${new Date(b.ts).toLocaleString()}　${esc(b.reason||"")}　成员${b.data.members.length}人</span><button class="btn small ghost" data-restore="${i}">恢复</button></div>`).join("")
+    : `<div class="empty">暂无备份</div>`,
+    [{label:"关闭"}]);
+  $$("#modalBox [data-restore]").forEach(b => b.onclick = () => {
+    const snap = list[+b.dataset.restore];
+    openModal("恢复备份", `<p>将把成员库、配置、搭子绑定恢复到 <b>${new Date(snap.ts).toLocaleString()}</b>（${esc(snap.reason)}）的时刻，当前数据会先备份。确定？</p>`,
+      [{label:"取消",ghost:true},{label:"恢复",onClick(){ backup("恢复备份前"); members = snap.data.members||[]; config = Object.assign({poolSizes:{MX:8,HS:7,NS:7}},snap.data.config||{}); ticketMap = snap.data.ticketMap||{}; partnerGroups = snap.data.partnerGroups||[];
+        saveMembers(); store.write("rc_config",config); store.write("rc_ticket_map",ticketMap); saveGroups(); renderMembers(); renderReg(); toast("已恢复备份","ok"); }}]);
+  });
+}
+
+$("#btnSync").onclick = () => {
+  const gh = config.github = config.github || {};
+  openModal("☁ GitHub 云端同步", `
+    <p class="muted" style="margin-bottom:8px">将成员库、配置、搭子绑定打包为 JSON 存入 GitHub 私有仓库；Token 仅保存在本机浏览器。</p>
+    <fieldset><legend>仓库配置</legend><div style="display:grid;gap:8px;grid-template-columns:1fr 1fr">
+      <label class="field"><span>Owner（用户名）</span><input type="text" id="ghOwner" value="${esc(gh.owner||"")}"></label>
+      <label class="field"><span>Repo（仓库名）</span><input type="text" id="ghRepo" value="${esc(gh.repo||"")}"></label>
+      <label class="field"><span>分支</span><input type="text" id="ghBranch" value="${esc(gh.branch||"main")}"></label>
+      <label class="field"><span>文件路径</span><input type="text" id="ghPath" value="${esc(gh.path||"data/rating-grouping.json")}"></label>
+      <label class="field" style="grid-column:1/3"><span>Personal Access Token（需 repo 权限，留空沿用已保存）</span><input type="text" id="ghToken" placeholder="留空表示不修改"></label>
+    </div></fieldset>
+    <div id="ghMsg" class="muted"></div>`,
+    [{label:"关闭",ghost:true},
+     {label:"⬇ 拉取", ghost:true, onClick(box){ saveGh(box); pullCloud(); return true; }},
+     {label:"⬆ 推送", onClick(box){ saveGh(box); pushCloud(); return true; }}]);
+  function saveGh(box){
+    gh.owner = box.querySelector("#ghOwner").value.trim(); gh.repo = box.querySelector("#ghRepo").value.trim();
+    gh.branch = box.querySelector("#ghBranch").value.trim() || "main"; gh.path = box.querySelector("#ghPath").value.trim() || "data/rating-grouping.json";
+    const tok = box.querySelector("#ghToken").value.trim();
+    if (tok) store.write("rc_github_token", tok);
+    store.write("rc_config", config);
+  }
+};
+function ghToken(){ return store.read("rc_github_token", ""); }
+function ghUrl(){ const gh = config.github; return `https://api.github.com/repos/${gh.owner}/${gh.repo}/contents/${encodeURI(gh.path)}?ref=${encodeURIComponent(gh.branch)}`; }
+function ghReady(){ const gh = config.github; return gh && gh.owner && gh.repo && ghToken(); }
+async function pushCloud(){
+  if (!ghReady()) { toast("请先填写仓库配置与 Token", "err"); return; }
+  toast("推送中…");
+  try {
+    let sha = null;
+    const head = await fetch(ghUrl(), { headers: ghHeaders() });
+    if (head.ok) sha = (await head.json()).sha;
+    const payload = { members, config, ticketMap, partnerGroups, savedAt: Date.now() };
+    const body = { message: `同步 ${new Date().toLocaleString()}`, branch: config.github.branch, sha,
+      content: btoa(unescape(encodeURIComponent(JSON.stringify(payload)))) };
+    const res = await fetch(ghUrl(), { method: "PUT", headers: ghHeaders(), body: JSON.stringify(body) });
+    if (!res.ok) throw new Error(`HTTP ${res.status}：${(await res.text()).slice(0,120)}`);
+    toast("已推送到云端", "ok");
+  } catch(e){ toast("推送失败：" + e.message, "err"); }
+}
+async function pullCloud(){
+  if (!ghReady()) { toast("请先填写仓库配置与 Token", "err"); return; }
+  toast("拉取中…");
+  try {
+    const res = await fetch(ghUrl(), { headers: ghHeaders() });
+    if (res.status === 404) { toast("云端暂无数据文件", "err"); return; }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const json = await res.json();
+    const payload = JSON.parse(decodeURIComponent(escape(atob(json.content))));
+    const same = JSON.stringify({ members, config, ticketMap, partnerGroups }) === JSON.stringify({ members: payload.members||[], config: payload.config, ticketMap: payload.ticketMap||{}, partnerGroups: payload.partnerGroups||[] });
+    const apply = () => { backup("拉取覆盖前"); members = payload.members||[]; config = Object.assign({poolSizes:{MX:8,HS:7,NS:7}}, payload.config||{}); ticketMap = payload.ticketMap||{}; partnerGroups = payload.partnerGroups||[];
+      saveMembers(); store.write("rc_config",config); store.write("rc_ticket_map",ticketMap); saveGroups(); renderMembers(); renderReg(); toast("已用云端数据覆盖本地", "ok"); };
+    if (same) { toast("云端与本地一致，无需覆盖"); return; }
+    openModal("拉取到云端数据", `<p>云端保存于 ${new Date(payload.savedAt||Date.now()).toLocaleString()}（成员 ${(payload.members||[]).length} 人），与本地数据不同。</p>`,
+      [{label:"保留本地（取消）",ghost:true},{label:"云端覆盖本地",onClick(){ apply(); }}]);
+  } catch(e){ toast("拉取失败：" + e.message, "err"); }
+}
+function ghHeaders(){ return { "Authorization": `token ${ghToken()}`, "Accept": "application/vnd.github.v3+json" }; }
+
+/* ── 初始化 ── */
+renderMembers();
+renderReg();
+renderPartners();
+renderTickets();
+renderResult();
+})();
+</script>
+</body>
+</html>

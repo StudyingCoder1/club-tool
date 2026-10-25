@@ -1,0 +1,68 @@
+# TECH_DOC.md — 羽毛球俱乐部评级分组工具 技术文档
+
+> 面向 AI/开发者接手维护。配套需求文档：《功能策划案 V1.0》《测试方案 V1.0》（本目录 docx）。
+> 本文档记录数据模型、算法约定与维护红线。**改代码前先读本文档；改完同步更新。**
+
+## 1. 形态与技术
+
+- 单文件原生应用：`index.html`（无框架、无构建）。部署 = 上传该文件到 GitHub Pages 等静态托管。
+- Excel 解析/导出：SheetJS（CDN `xlsx@0.18.5`）。CDN 失联时上传入口给出降级提示。
+- 存储：localStorage（前缀 `rc_`）。云端同步：GitHub Contents API + Token（手动推送/拉取）。
+- 交互约定：不用 `prompt()/confirm()/alert()`（微信内置浏览器不支持）；用 Toast + 模态弹窗；危险操作二次确认；覆盖性写入前自动备份。
+
+## 2. 代码结构（index.html 内）
+
+```
+<style>                     样式
+<script>  GROUP CORE START ~ END   ← 分组核心（纯函数，无 DOM）
+  RATINGS / RATING_VALUE / SESSIONS / EPS
+  ratingValue / normId / parseRating / excelDate
+  parseMemberWorkbook / mergeMembers          成员表解析与合并
+  parseRegistrationWorkbook                   报名表解析（活动信息区+数据行+去重）
+  suggestSessionType / autoCourtNames         票种映射建议 / 场地自动命名
+  buildGrouping                               ★ 分组主算法 S1–S8（唯一算法入口）
+  buildPools / finalizePool / checkInvariants 贪心组池 / 池内排序与女生均衡 / 不变式
+</script>
+<script>  应用层 IIFE                        UI / localStorage / 弹窗 / 导出 / 同步
+</script>
+```
+
+## 3. 数据模型（localStorage 键）
+
+| 键 | 内容 |
+|---|---|
+| `rc_members` | 成员数组：`{playId, nickname, pastNicknames[], gender, rating, selfLevel, tag, joinCount, cancelCount, lastJoinAt, updatedAt}`。rating ∈ RATINGS 或 null（未评级） |
+| `rc_reg` | 当前报名（刷新自动恢复）：`{activity, participants[], waitlist[], dedup, anomalies, fileName}`；行：`{regId, playId, nickname, gender, ticket, status, createdAt, order, excluded?}` |
+| `rc_partner_groups` | `[{id, name, memberIds[]}]` |
+| `rc_ticket_map` | 票种文本 → 场次类型（MX/HS/NS/FREE），跨场次记忆 |
+| `rc_config` | `{poolSizes:{MX:8,HS:7,NS:7,FREE:0}, partnerGap:0.5, github:{owner,repo,branch,path}}`（FREE=0 表示自由场不限容量、按场地均分） |
+| `rc_github_token` | GitHub Token（仅本地） |
+| `rc_results` | 最近 10 次分组结果 |
+| `rc_backups` | 自动备份（最多 5 份 / 1MB） |
+
+成员评级来源：导入时映射「羽毛球真实水平」列（`parseRating`：`2级→"2"`、`3级+`/`4级→"3+"`、空→null 不覆盖库内已有值）。
+
+## 4. 分组算法约定（改算法必读）
+
+- **硬规则**：轮转池以"主档"为中心，任意成员与主档评级差 ≤0.5（主档±0.5 补位）；搭子组不可拆（跨档保留组除外，按组内最高评级入池并标注）；萌新 8 人池、混双/女双 7 人池；女双全女。
+- **3+ 自由场**：不轮转、不配对，但**按场地均衡分场**——票种配置场地数/场地名，搭子组同场（组单元不拆），先报名先排，依次放入当前人最少的场地（场间人数差 ≤ 最大单元）；设置中"3+自由场（人/场）"=0 表示不限容量纯均分，>0 时启用 E11 超员流程；评级 <3 报自由场逐人提示。
+- **主档选择**：萌新固定高档优先（1→0.5→0）；混双/女双按"建池满度"评分（本档+两侧相邻可吸纳人数，受容量限制），并列取人数多、再取高档。
+- **补位顺序**：先人多侧、并列先高档侧；普通搭子单元整体需落在主档±0.5 内（跨档保留组豁免）。
+- **池内排序**：主键单元档位降序、次键玩聚号升序（=本档强→弱），搭子相邻；梯度序号按此预排顺序编发。
+- **女生均衡**（萌新/混双）：按"块"（搭子单元/个人）隔位插入，不打乱等级块归属、不拆搭子；轮转序=均衡后顺序，梯度序号不变。
+- **超员（E11）**：确认后按报名顺位（首次报名行序）保留，整单元取舍，溢出转候补（自由场仅在容量>0 时检查）。
+- **场地耗尽遗留**：先尝试回填到同场次"未满且主档±0.5 匹配"的池，仍无去处才列"未成池"警示。
+- 上述规则由 `checkInvariants`（I1–I8）在每次分组后自检，违反即中止并弹窗——**不要删除这道自检**。
+
+## 5. 维护红线
+
+1. **改分组规则只改 GROUP CORE 区**，且必须同步：`test/core.test.js`（算法用例+不变式）与本文档第 4 节。跑法：`cd test && npm install && npm test`（当前 220 项全通过）。
+2. **改导出列**：`exportResult()`（Sheet1 总览/Sheet2 名单/Sheet3 候补警示）与"复制文本"格式在应用层，两处同步改。复制文本对齐组织者微信群公布格式：多行活动标题（`activity.titleFull`）→ 开始/结束时间、组织者 → `--(X男Y女)类型短名 X组 场地名` 块（类型短名：萌新养生/微微对抗/女双对抗/3+自由场；组字母按场次内顺序 A、B…；场地名全部为「N号场」时按场地号排序，否则保持场次分组顺序）→ `序号. 昵称`（女生带 ` (女)🌹`）→ 候补/待处理（如有）→ 尾部文案。尾部三行文案存 `config.copyFooter`（设置里可改，默认含协调人提示），默认值在 `DEFAULT_COPY_FOOTER`。
+3. **改输入解析**：列定位按表头名（勿改成固定列号）；`.xls` 中玩聚号/报名标识是浮点数，必须走 `normId`。
+4. IIFE 内函数不暴露全局；E2E/自动化只通过 DOM 与 localStorage 驱动。
+5. 已知设计取舍：报名标识规律（玩聚号×100+序号）仅作记录 ID 使用，算法不依赖。
+
+## 6. 输入文件格式（实测）
+
+- 成员表（如 `俱乐部信息名单.xlsx`，Sheet「成员详细信息」，13 列表头行）：昵称/玩聚号/性别/参与次数/取消次数/会员级别(忽略)/会员余额(忽略)/最后参与时间/聚昵称(忽略)/羽毛球水平(自评参考)/羽毛球标签/羽毛球真实水平(→人工评级)。
+- 报名表（如 `分组.xls`，Sheet「报名清单」，19 列表头行）：前几行为活动信息区（标题/开始时间/结束时间/组织者，在首列合并单元格）；数据行自「序号」为数字起。关键列：票种/昵称/报名标识/玩聚号/性别/报名状态(已报名|候补)/创建时间。
