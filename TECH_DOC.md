@@ -39,6 +39,8 @@
 | `rc_github_token` | GitHub Token（仅本地） |
 | `rc_results` | 最近 10 次分组结果 |
 | `rc_backups` | 自动备份（最多 5 份 / 1MB） |
+| `rc_court_names` | 场地号记忆池（下拉选项来源，新增/使用过的场地号自动累积） |
+| `rc_court_count_opts` | 自定义场地数选项（超出预置 1~8 的数量记住后出现在下拉） |
 
 成员评级来源：导入时映射「羽毛球真实水平」列（`parseRating`：`2级→"2"`、`3级+`/`4级→"3+"`、空→null 不覆盖库内已有值）。
 

@@ -813,6 +813,22 @@ const $ = s => document.querySelector(s);
 const $$ = s => Array.from(document.querySelectorAll(s));
 const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
 
+/* ── 全局错误兜底：任何未捕获错误都给出可见提示，避免"点了没反应" ── */
+window.addEventListener("error", e => {
+  const t = document.createElement("div");
+  t.className = "toast err";
+  t.textContent = "发生错误：" + (e.message || "未知") + "（请强刷新 Ctrl+F5 后重试，仍有问题请截图反馈）";
+  document.querySelector("#toasts").appendChild(t);
+  setTimeout(() => t.remove(), 8000);
+});
+window.addEventListener("unhandledrejection", e => {
+  const t = document.createElement("div");
+  t.className = "toast err";
+  t.textContent = "处理失败：" + (e.reason && e.reason.message ? e.reason.message : e.reason || "未知");
+  document.querySelector("#toasts").appendChild(t);
+  setTimeout(() => t.remove(), 8000);
+});
+
 /* ── 存储 ── */
 const store = {
   read(key, fallback){ try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; } catch(e){ return fallback; } },
@@ -974,6 +990,7 @@ function importReg(file){
       reg = { ...parsed, fileName: file.name };
       store.write("rc_reg", reg);
       crossDecisions = {}; allowOverflow = false; lastResult = null;
+      ticketCfgState = {};   // 新报名表：场地配置重新开始（场地号池仍记住）
       partnerGroups = partnerGroups.filter(g => g.memberIds.every(id => allRegIds().includes(id)));
       saveGroups();
       renderReg();
@@ -1072,13 +1089,20 @@ function renderPartners(){
   });
 }
 function openGroupEditor(g){
-  // 选择器按人（玩聚号）去重展示——选中即绑定该人全部名额
+  // 选择器按人（玩聚号）去重展示——选中即绑定该人全部名额；
+  // 已加入「其他」搭子组的人不再出现在候选里（一人同时只属一组；编辑本组时本组成员保留）
+  const inOther = new Set();
+  partnerGroups.forEach(x => { if (x !== g) (x.memberIds || []).forEach(id => inOther.add(String(id))); });
   const active = []; const seenP = new Set();
-  reg.participants.filter(p => !p.excluded).forEach(p => { if (!seenP.has(p.playId)) { seenP.add(p.playId); active.push(p); } });
+  reg.participants.filter(p => !p.excluded).forEach(p => {
+    if (seenP.has(p.playId) || inOther.has(String(p.playId))) return;
+    seenP.add(p.playId); active.push(p);
+  });
   const selected = new Set(g ? g.memberIds : []);
   openModal(g ? "编辑搭子组" : "新增搭子组", `
     <label class="field"><span>组名（如：A组）</span><input type="text" id="gName" value="${esc(g ? g.name : "搭子组"+(partnerGroups.length+1))}"></label>
     <div style="margin-top:10px"><input type="text" id="gSearch" placeholder="搜索昵称/玩聚号…" style="width:100%"></div>
+    ${inOther.size ? `<div class="muted" style="margin-top:4px">已有 ${inOther.size} 人加入其他搭子组，不在下方候选列表中</div>` : ""}
     <div id="gSelChips" style="margin:8px 0"></div>
     <div id="gList" style="max-height:300px; overflow:auto; border:1px solid var(--line); border-radius:8px"></div>`,
     [{label:"取消",ghost:true},{label:"保存",onClick(box){
@@ -1108,40 +1132,96 @@ function openGroupEditor(g){
   renderList(); renderChips();
 }
 
-/* ── 步骤3：票种与场地 ── */
+/* ── 步骤3：票种与场地（场地数/场地号均为下拉，支持新增并记住） ── */
+let ticketCfgState = {};   // { 票种: {count, names[]} }，切换步骤不丢，换报名表重置
+function courtNamePool(){ return store.read("rc_court_names", []); }
+function addCourtName(name){ const pool = courtNamePool(); if (!pool.includes(name)) { pool.push(name); store.write("rc_court_names", pool); } }
+function countOptions(){ return [...new Set([1,2,3,4,5,6,7,8, ...store.read("rc_court_count_opts", [])])].sort((a,b)=>a-b); }
+
 function renderTickets(){
   if (!reg) { $("#ticketList").innerHTML = `<div class="empty">请先上传报名表</div>`; return; }
   const tickets = [...new Set([...reg.participants, ...reg.waitlist].map(r => r.ticket))];
-  $("#ticketList").innerHTML = tickets.map((t, i) => {
-    const cnt = reg.participants.filter(p => p.ticket === t && !p.excluded).length;
-    const type = ticketMap[t] || suggestSessionType(t);
-    return `<div class="ticketcfg" data-ticket="${esc(t)}">
-      <div class="tname">${i+1}. ${esc(t)}　<span class="chip info">${cnt} 人已报名</span></div>
-      <div class="trow">
-        <label class="field"><span>场次类型</span><select class="tType">${Object.keys(SESSIONS).map(k => `<option value="${k}" ${type===k?"selected":""}>${SESSIONS[k].label}</option>`).join("")}</select></label>
-        <label class="field f-count"><span>场地数</span><input type="number" class="tCount" min="1" value="1"></label>
-        <label class="field" style="flex:1; min-width:240px"><span>场地名（逗号分隔，留空自动编号；如 11号场,12号场）</span><input type="text" class="tCourts" placeholder="留空自动：场地1、场地2…"></label>
-      </div></div>`;
+  $("#ticketList").innerHTML = tickets.map(t => ticketCardHtml(t)).join("");
+  bindTicketCards();
+}
+function ticketCardHtml(t){
+  const cnt = reg.participants.filter(p => p.ticket === t && !p.excluded).length;
+  const type = ticketMap[t] || suggestSessionType(t);
+  const st = ticketCfgState[t] || (ticketCfgState[t] = { count: 1, names: [] });
+  const pool = courtNamePool();
+  const prefix = { MX: "萌新", HS: "混双", NS: "女双", FREE: "自由" }[type] || "场地";
+  const nameSelects = Array.from({ length: st.count }, (_, i) => {
+    const cur = st.names[i] || "";
+    return `<select class="tCourt" data-idx="${i}" title="第${i+1}块场地">
+      <option value="">自动（${prefix}${i + 1}场）</option>
+      ${pool.map(n => `<option value="${esc(n)}" ${n === cur ? "selected" : ""}>${esc(n)}</option>`).join("")}
+      <option value="__add">➕ 新增场地号…</option></select>`;
   }).join("");
+  return `<div class="ticketcfg" data-ticket="${esc(t)}">
+    <div class="tname">${esc(t)}　<span class="chip info">${cnt} 个名额已报名</span></div>
+    <div class="trow">
+      <label class="field"><span>场次类型</span><select class="tType">${Object.keys(SESSIONS).map(k => `<option value="${k}" ${type === k ? "selected" : ""}>${SESSIONS[k].label}</option>`).join("")}</select></label>
+      <label class="field"><span>场地数</span><select class="tCount">${countOptions().map(n => `<option value="${n}" ${n === st.count ? "selected" : ""}>${n}</option>`).join("")}<option value="__add">➕ 自定义数量…</option></select></label>
+    </div>
+    <div class="trow" style="align-items:center"><span class="muted" style="white-space:nowrap">场地号：</span><span style="display:flex;gap:6px;flex-wrap:wrap">${nameSelects}</span></div>
+  </div>`;
+}
+function bindTicketCards(){
   $$("#ticketList .ticketcfg").forEach(el => {
     const t = el.dataset.ticket;
-    const typeSel = el.querySelector(".tType");
-    typeSel.onchange = () => { ticketMap[t] = typeSel.value; store.write("rc_ticket_map", ticketMap); };
+    const st = ticketCfgState[t] || (ticketCfgState[t] = { count: 1, names: [] });
+    el.querySelector(".tType").onchange = e => { ticketMap[t] = e.target.value; store.write("rc_ticket_map", ticketMap); renderTickets(); };
+    el.querySelector(".tCount").onchange = e => {
+      if (e.target.value === "__add") { askCustomCount(t); return; }
+      st.count = parseInt(e.target.value) || 1; renderTickets();
+    };
+    el.querySelectorAll(".tCourt").forEach(sel => sel.onchange = () => {
+      if (sel.value === "__add") { askNewCourtName(t, +sel.dataset.idx); return; }
+      st.names[+sel.dataset.idx] = sel.value;
+    });
   });
+}
+function askCustomCount(ticket){
+  openModal("自定义场地数", `<label class="field"><span>场地数（1~30）</span><input type="number" id="ccNum" min="1" max="30" value="1"></label>`,
+    [{ label:"取消", ghost:true, onClick(){ renderTickets(); } },
+     { label:"确定", onClick(box){
+       const v = parseInt(box.querySelector("#ccNum").value);
+       if (!(v >= 1 && v <= 30)) { toast("请输入 1~30 的数字", "err"); return true; }
+       ticketCfgState[ticket].count = v;
+       const opts = store.read("rc_court_count_opts", []);
+       if (!opts.includes(v) && v > 8) { opts.push(v); store.write("rc_court_count_opts", opts); }
+       renderTickets();
+     }}]);
+}
+function askNewCourtName(ticket, idx){
+  openModal("新增场地号", `<label class="field"><span>场地号（如 16 或 16号场，新增后记住可复用）</span><input type="text" id="cnName" placeholder="16"></label>`,
+    [{ label:"取消", ghost:true, onClick(){ renderTickets(); } },
+     { label:"新增", onClick(box){
+       let n = box.querySelector("#cnName").value.trim();
+       if (!n) { toast("请输入场地号", "err"); return true; }
+       if (/^\d+$/.test(n)) n += "号场";
+       addCourtName(n);
+       ticketCfgState[ticket].names[idx] = n;
+       renderTickets();
+     }}]);
 }
 function collectTicketConfig(){
   const types = {}, courts = {};
   if (!reg) return { types, courts };
-  $$("#ticketList .ticketcfg").forEach(el => {
-    const t = el.dataset.ticket;
-    const type = el.querySelector(".tType").value;
-    types[t] = type;
-    ticketMap[t] = type;
-    const raw = el.querySelector(".tCourts").value.trim();
-    const cnt = Math.max(1, parseInt(el.querySelector(".tCount").value) || 1);
-    const names = raw ? raw.split(/[,，、\s]+/).filter(Boolean) : autoCourtNames(cnt, type);
+  const tickets = [...new Set([...reg.participants, ...reg.waitlist].map(r => r.ticket))];
+  for (const t of tickets) {
+    const type = ticketMap[t] || suggestSessionType(t);
+    types[t] = type; ticketMap[t] = type;
+    const st = ticketCfgState[t] || { count: 1, names: [] };
+    const autos = autoCourtNames(st.count, type);
+    const names = [];
+    for (let i = 0; i < st.count; i++) {
+      const n = st.names[i] || autos[i];
+      names.push(n);
+      if (st.names[i]) addCourtName(n);   // 用过的场地号记住，下次可选
+    }
     courts[t] = names;
-  });
+  }
   store.write("rc_ticket_map", ticketMap);
   return { types, courts };
 }
@@ -1168,12 +1248,8 @@ function validateGrouping(){
 
   for (const t in types) {
     if (!types[t]) blocking.push({ code:"E09", msg:`票种「${t}」未选择场次类型` });
-    if (types[t]) {
-      const el = $$("#ticketList .ticketcfg").find(x => x.dataset.ticket === t);
-      const rawNames = el && el.querySelector(".tCourts") ? el.querySelector(".tCourts").value.trim() : "";
-      const cnt = el && el.querySelector(".tCount") ? (parseInt(el.querySelector(".tCount").value) || 0) : 0;
-      if (!rawNames && cnt < 1) blocking.push({ code:"E10", msg:`票种「${t.slice(0,30)}」请至少配置 1 块场地` });
-    }
+    const cntCfg = ticketCfgState[t] ? ticketCfgState[t].count : 1;
+    if (types[t] && !(cntCfg >= 1)) blocking.push({ code:"E10", msg:`票种「${t.slice(0,30)}」请至少配置 1 块场地` });
   }
 
   const confirmations = [];
@@ -1202,14 +1278,18 @@ function validateGrouping(){
 
 /* ── 开始分组（含 E01–E12 交互流程） ── */
 $("#btnDoGroup").onclick = () => {
-  if (!reg) { toast("请先上传报名表", "err"); return; }
-  const v = validateGrouping();
-  // 快捷修复类：E03/E04/E08
-  const fixables = v.blocking.filter(b => b.rows);
-  const hards = v.blocking.filter(b => !b.rows);
-  if (hards.length) { showBlocking(hards); return; }
-  if (fixables.length) { showQuickFix(fixables, v); return; }
-  proceedConfirmations(v.confirmations, []);
+  try {
+    if (!reg) { toast("请先上传报名表", "err"); return; }
+    const v = validateGrouping();
+    // 快捷修复类：E03/E04/E08
+    const fixables = v.blocking.filter(b => b.rows);
+    const hards = v.blocking.filter(b => !b.rows);
+    if (hards.length) { showBlocking(hards); return; }
+    if (fixables.length) { showQuickFix(fixables, v); return; }
+    proceedConfirmations(v.confirmations, []);
+  } catch(err) {
+    openModal("分组出错", `<div class="errlist"><b>${esc(err.message)}</b><br>${esc((err.stack||"").split("\n")[1]||"")}<br><br>请尝试强刷新页面（Ctrl+F5）后重试；仍有问题请截图此窗口反馈。</div>`);
+  }
 };
 function showBlocking(list){
   openModal("无法开始分组", list.map(b => `<div class="errlist"><b>${esc(b.code)}</b> ${esc(b.msg)}</div>`).join(""),
