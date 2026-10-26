@@ -60,6 +60,8 @@ header .actions button{
   border-radius:10px; padding:7px 14px; cursor:pointer; font-size:13px; transition:all .18s;
 }
 header .actions button:hover{background:rgba(255,255,255,.16); color:#fff;}
+header .ver{font-size:11.5px; color:#7f92ab; border:1px solid rgba(255,255,255,.18); border-radius:99px;
+  padding:3px 10px; margin-right:2px; cursor:help; letter-spacing:.4px;}
 
 /* ═══════════ 布局与卡片 ═══════════ */
 main{max-width:1200px; margin:0 auto; padding:20px;}
@@ -268,6 +270,7 @@ legend{font-size:12px; color:var(--muted); padding:0 6px; font-weight:700; lette
     <button id="tabBtnGroup">羽毛球活动分组</button>
   </nav>
   <div class="actions">
+    <span id="verBadge" class="ver" title=""></span>
     <button id="btnSync">☁ 云端同步</button>
     <button id="btnSettings">⚙ 设置</button>
   </div>
@@ -957,6 +960,7 @@ function checkInvariants(result, input){
 
 <script>
 /* ═════════════════════════ 应用层（UI / 存储 / 同步） ═════════════════════════ */
+const APP_VERSION = "v2.0（2026-10-26）";
 (function(){
 "use strict";
 const $ = s => document.querySelector(s);
@@ -1770,6 +1774,7 @@ async function pullCloud(){
 function ghHeaders(){ return { "Authorization": `token ${ghToken()}`, "Accept": "application/vnd.github.v3+json" }; }
 
 /* ── 初始化 ── */
+(function(){ const v = document.querySelector("#verBadge"); if (v) { v.textContent = APP_VERSION; v.title = "当前版本 " + APP_VERSION + "（版本不对请重新上传 index.html 并 Ctrl+F5 强刷）"; } })();
 renderMembers();
 renderReg();
 renderPartners();
