@@ -626,31 +626,32 @@ function buildGrouping(input){
     if (st && units[st]) units[st].push(unit);   // FREE 场不轮转，但分场时保持搭子同场
   }
 
-  /* 评级范围检查（I8）：搭子单元按组内最高评级判定；未评级按场次默认档参与并计数 */
+  /* 档位归一（I8 改为就近档参与，不再单列待处理）：
+   * 未评级 → 场次默认档；评级超出场次范围 → 就近收敛到范围边界档位，全员参与分组并标注 */
+  const clampLevel = (v, range) => Math.min(Math.max(v, range[0]), range[1]);
   for (const st of ["MX", "HS", "NS"]) {
     const range = SESSIONS[st].range;
     const okUnits = [];
     let assumed = 0;
+    const effOfMember = (m) => {
+      const raw = ratingValue(m.rating);
+      if (raw === null) { assumed++; return DEFAULT_LEVEL[st]; }
+      const eff = clampLevel(raw, range);
+      if (Math.abs(eff - raw) > EPS) {
+        m.__clampTo = eff;
+        warnings.push({ code: "LEVEL-CLAMP", msg: `${m.nickname}（${m.rating}）超出${SESSIONS[st].label}范围，已按 ${fmtLevel(eff)} 档就近参与` });
+      }
+      return eff;
+    };
     for (const u of units[st]) {
-      const maxOk = u.level >= range[0] - EPS && u.level <= range[1] + EPS;
-      if (!maxOk) {
-        const reason = `搭子组「${u.groupName}」最高评级 ${fmtLevel(u.level)} 超出${SESSIONS[st].label}准入（${range[0]}~${range[1]}）`;
-        if (u.crossKept) { manual.push({ unit: u, reason }); warnings.push({ code: "CROSS-PLACE", msg: reason + "，已单列待人工放置" }); }
-        else { u.members.forEach(m => unassigned.push({ p: m, reason })); warnings.push({ code: "RATING-MISMATCH", msg: reason }); }
-      } else okUnits.push(u);
-      assumed += u.members.filter(m => ratingValue(m.rating) === null).length;
+      const effs = u.members.map(effOfMember);
+      u.level = Math.max(...effs); u.minLevel = Math.min(...effs);
+      okUnits.push(u);
     }
     for (const p of sess[st]) {
       if (grouped.has(p.regId)) continue;
-      const raw = ratingValue(p.rating);
-      const v = raw !== null ? raw : DEFAULT_LEVEL[st];   // 未评级 → 默认档
-      if (raw === null) assumed++;
-      if (v < range[0] - EPS || v > range[1] + EPS) {
-        unassigned.push({ p, reason: `评级 ${p.rating} 超出${SESSIONS[st].label}准入（${range[0]}~${range[1]}）` });
-        warnings.push({ code: "RATING-MISMATCH", msg: `${p.nickname}（${p.rating}）票种为${SESSIONS[st].label}，评级不匹配，已单列待处理` });
-      } else {
-        okUnits.push({ isGroup: false, members: [p], size: 1, key: num(p.playId), order: p.order, level: v, minLevel: v, crossKept: false });
-      }
+      const v = effOfMember(p);
+      okUnits.push({ isGroup: false, members: [p], size: 1, key: num(p.playId), order: p.order, level: v, minLevel: v, crossKept: false });
     }
     units[st] = okUnits;
     if (assumed > 0) warnings.push({ code: "E04", msg: `${SESSIONS[st].label}有 ${assumed} 个名额未评级，已按默认档 ${fmtLevel(DEFAULT_LEVEL[st])} 参与分组（结果中以「默认」标注，同档内按玩聚号排序）` });
@@ -685,8 +686,9 @@ function buildGrouping(input){
       poolUnits = [];
     }
 
-    // S5 贪心组池
+    // S5 贪心组池 + 女生跨池均衡（女双全女不适用）
     const { pools, leftover } = buildPools(poolUnits, C, st, N);
+    if (st !== "NS") balanceFemalesAcrossPools(pools);
 
     // S6+S7+S8 排序、女生均衡、落场
     pools.forEach((pool, i) => {
@@ -698,6 +700,7 @@ function buildGrouping(input){
           playId: m.playId, regId: m.regId, nickname: m.nickname, rating: m.rating, gender: m.gender,
           gradient: m.__grad, rotation: idx + 1,
           unitLevel: m.__unitLevel != null ? m.__unitLevel : ratingValue(m.rating),
+          clampedTo: m.__clampTo != null ? fmtLevel(m.__clampTo) : null,
           groupId: m.__groupId || null, groupName: m.__groupName || null,
           crossKept: !!m.__cross
         }))
@@ -857,6 +860,40 @@ function buildPools(units, C, st, maxPools){
 }
 function setBucket(map, k, arr){ if (arr.length) map.set(k, arr); else map.delete(k); }
 
+/* 女生跨池均衡：同场次各池女生数尽量接近（差 ≤1）。
+ * 只交换"个人单元"（不拆搭子组、不动跨档保留组），同等级优先对换；
+ * 对换需同时满足双方池的主档 ±0.5 约束，等级归属与容量不变 */
+function balanceFemalesAcrossPools(pools){
+  if (!pools.length) return pools;
+  const fCount = p => p.units.reduce((s, u) => s + (u.members.some(m => m.gender === "女") ? u.size : 0), 0);
+  const indiv = (p, gender) => p.units.filter(u => !u.isGroup && !u.crossKept && u.members[0].gender === gender);
+  let guard = 100;
+  while (guard-- > 0) {
+    const counts = pools.map(fCount);
+    const maxC = Math.max(...counts), minC = Math.min(...counts);
+    if (maxC - minC <= 1) break;
+    const srcIdx = pools.findIndex((p, i) => counts[i] === maxC && indiv(p, "女").length);
+    if (srcIdx < 0) break;
+    const src = pools[srcIdx];
+    let moved = false;
+    for (let di = 0; di < pools.length; di++) {
+      if (counts[di] !== minC || di === srcIdx) continue;
+      const dst = pools[di];
+      const fem = indiv(src, "女")[0];
+      if (!fem) break;
+      const males = indiv(dst, "男");
+      const male = males.find(u => u.level === fem.level) ||
+        males.find(u => Math.abs(fem.level - dst.main) <= 0.5 + EPS && Math.abs(u.level - src.main) <= 0.5 + EPS);
+      if (!male) continue;
+      src.units = src.units.filter(u => u !== fem); src.units.push(male);
+      dst.units = dst.units.filter(u => u !== male); dst.units.push(fem);
+      moved = true; break;
+    }
+    if (!moved) break;
+  }
+  return pools;
+}
+
 /* S6 池内梯度排序（评级↓ 玩聚号↑，搭子相邻）+ S7 女生均衡 */
 function finalizePool(pool, st){
   pool.units.sort((a, b) => (b.level - a.level) || (a.key - b.key));
@@ -960,7 +997,7 @@ function checkInvariants(result, input){
 
 <script>
 /* ═════════════════════════ 应用层（UI / 存储 / 同步） ═════════════════════════ */
-const APP_VERSION = "v2.1（2026-10-26）";
+const APP_VERSION = "v2.2（2026-10-27）";
 (function(){
 "use strict";
 const $ = s => document.querySelector(s);
@@ -1554,6 +1591,7 @@ function doGrouping(){
     lastResult = { ts: Date.now(), activity: reg.activity, result };
     history.unshift(lastResult); history = history.slice(0, 10);
     store.write("rc_results", history);
+    closeModal();   // 关闭链路上的确认弹窗（分组前检查/E07/E11）
     renderResult();
     gotoStep(4);
     toast(`分组完成：${result.stats.pooled} 人入池，警示 ${result.warnings.length} 条`, "ok");
@@ -1580,7 +1618,7 @@ function renderResult(){
       <div class="ctitle"><span>${esc(c.name)} · ${esc(c.label)}</span><span class="muted">${c.members.length}人${c.underfull?" ⚠未满池":""}</span></div>
       <ul>${c.members.map(m => `<li><span class="grad">${m.gradient||""}</span><b>${esc(m.nickname)}</b>
         <span class="${m.gender==="女"?"female":"male"}">${m.gender==="女"?"♀":"♂"}</span>
-        <span class="muted">${m.rating ? esc(m.rating) : (m.unitLevel != null && c.sessionType !== "FREE" ? "默认"+fmtLevel(m.unitLevel) : "")}</span>
+        <span class="muted">${m.rating ? (m.clampedTo ? esc(m.rating) + "·按" + esc(m.clampedTo) + "档" : esc(m.rating)) : (m.unitLevel != null && c.sessionType !== "FREE" ? "默认"+fmtLevel(m.unitLevel) : "")}</span>
         ${m.groupName?`<span class="tag">${esc(m.groupName)}</span>`:""}
         ${m.crossKept?`<span class="tag" style="background:#ffe9c8">跨档搭子</span>`:""}</li>`).join("")}</ul>
     </div>`).join("");
@@ -1616,7 +1654,7 @@ function exportResult(){
   XLSX.utils.book_append_sheet(wb, ws1, "分组总览");
   const list = [["场地","类型","梯度","轮转序","昵称","评级","性别","玩聚号","标记"]];
   r.courts.forEach(c => c.members.forEach(m => list.push([c.name, c.label, m.gradient||"", m.rotation||"", m.nickname,
-    m.rating || (m.unitLevel != null && c.sessionType !== "FREE" ? "默认"+fmtLevel(m.unitLevel) : ""),
+    m.clampedTo ? m.rating + "→按" + m.clampedTo + "档" : (m.rating || (m.unitLevel != null && c.sessionType !== "FREE" ? "默认"+fmtLevel(m.unitLevel) : "")),
     m.gender, m.playId, [m.groupName, m.crossKept?"跨档搭子":""].filter(Boolean).join("/") ])));
   const ws2 = XLSX.utils.aoa_to_sheet(list); ws2["!cols"] = [{wch:12},{wch:9},{wch:6},{wch:7},{wch:16},{wch:6},{wch:6},{wch:11},{wch:12}];
   XLSX.utils.book_append_sheet(wb, ws2, "各场地名单");
