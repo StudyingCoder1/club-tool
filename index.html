@@ -960,7 +960,7 @@ function checkInvariants(result, input){
 
 <script>
 /* ═════════════════════════ 应用层（UI / 存储 / 同步） ═════════════════════════ */
-const APP_VERSION = "v2.0（2026-10-26）";
+const APP_VERSION = "v2.1（2026-10-26）";
 (function(){
 "use strict";
 const $ = s => document.querySelector(s);
@@ -1494,7 +1494,10 @@ function showQuickFix(fixables, v){
       const v2 = validateGrouping();
       const hards = v2.blocking.filter(b => !b.rows);
       if (hards.length) { setTimeout(()=>showBlocking(hards), 120); return false; }
-      proceedConfirmations(v2.confirmations, []);
+      // 异步续链：先让外层关闭本弹窗，再打开 E07/E11/结果，
+      // 避免外层 closeModal 把后续确认弹窗一起关掉（表现为“点了没反应”）
+      setTimeout(() => proceedConfirmations(v2.confirmations, []), 60);
+      return true;
     }}]);
 }
 function proceedConfirmations(remaining, resolved){
@@ -1524,7 +1527,10 @@ function proceedOverflow(resolved){
   if (overflowSess.length && !allowOverflow) {
     openModal("E11 报名超员", overflowSess.map(o => `<div class="errlist"><b>${SESSIONS[o.st].label}</b>：报名 ${o.count} 人 > 场地容量 ${o.cap} 人。<br>默认按<b>报名先后</b>保留 ${o.cap} 人，其余转候补（可在报名列表手动调整后重试）。</div>`).join(""),
       [{ label:"返回调整场地", ghost:true },
-       { label:"按报名顺序保留并继续", onClick(){ allowOverflow = true; doGrouping(); }}]);
+       { label:"按报名顺序保留并继续", onClick(){
+         allowOverflow = true;
+         setTimeout(doGrouping, 60);   // 异步执行，避免外层 closeModal 吞掉分组中弹出的提示
+       }}]);
     return;
   }
   doGrouping();
