@@ -1550,14 +1550,17 @@ function showBackups(){
 
 $("#btnSync").onclick = () => {
   const gh = config.github = config.github || {};
+  // 默认值：沿用羽毛球收支管理站的私有数据仓库（badminton-data），路径独立互不干扰；仅需填 Token
+  const DEF = { owner: "StudyingCoder1", repo: "badminton-data", branch: "main", path: "data/rating-grouping.json" };
+  const tokenSaved = !!ghToken();
   openModal("☁ GitHub 云端同步", `
     <p class="muted" style="margin-bottom:8px">将成员库、配置、搭子绑定打包为 JSON 存入 GitHub 私有仓库；Token 仅保存在本机浏览器。</p>
-    <fieldset><legend>仓库配置</legend><div style="display:grid;gap:8px;grid-template-columns:1fr 1fr">
-      <label class="field"><span>Owner（用户名）</span><input type="text" id="ghOwner" value="${esc(gh.owner||"")}"></label>
-      <label class="field"><span>Repo（仓库名）</span><input type="text" id="ghRepo" value="${esc(gh.repo||"")}"></label>
-      <label class="field"><span>分支</span><input type="text" id="ghBranch" value="${esc(gh.branch||"main")}"></label>
-      <label class="field"><span>文件路径</span><input type="text" id="ghPath" value="${esc(gh.path||"data/rating-grouping.json")}"></label>
-      <label class="field" style="grid-column:1/3"><span>Personal Access Token（需 repo 权限，留空沿用已保存）</span><input type="text" id="ghToken" placeholder="留空表示不修改"></label>
+    <fieldset><legend>仓库配置（已预填默认值，通常只需填 Token）</legend><div style="display:grid;gap:8px;grid-template-columns:1fr 1fr">
+      <label class="field"><span>Owner（用户名）</span><input type="text" id="ghOwner" value="${esc(gh.owner || DEF.owner)}"></label>
+      <label class="field"><span>Repo（仓库名）</span><input type="text" id="ghRepo" value="${esc(gh.repo || DEF.repo)}"></label>
+      <label class="field"><span>分支</span><input type="text" id="ghBranch" value="${esc(gh.branch || DEF.branch)}"></label>
+      <label class="field"><span>文件路径</span><input type="text" id="ghPath" value="${esc(gh.path || DEF.path)}"></label>
+      <label class="field" style="grid-column:1/3"><span>Personal Access Token（需 repo 权限${tokenSaved ? "，已保存，留空沿用" : ""}）</span><input type="text" id="ghToken" placeholder="${tokenSaved ? "已保存，留空沿用" : "ghp_ 开头"}"></label>
     </div></fieldset>
     <div id="ghMsg" class="muted"></div>`,
     [{label:"关闭",ghost:true},
@@ -1575,7 +1578,7 @@ function ghToken(){ return store.read("rc_github_token", ""); }
 function ghUrl(){ const gh = config.github; return `https://api.github.com/repos/${gh.owner}/${gh.repo}/contents/${encodeURI(gh.path)}?ref=${encodeURIComponent(gh.branch)}`; }
 function ghReady(){ const gh = config.github; return gh && gh.owner && gh.repo && ghToken(); }
 async function pushCloud(){
-  if (!ghReady()) { toast("请先填写仓库配置与 Token", "err"); return; }
+  if (!ghToken()) { toast("请先在同步弹窗填写 GitHub Token（需 repo 权限），其余项已预填默认", "err"); return; }
   toast("推送中…");
   try {
     let sha = null;
@@ -1590,7 +1593,7 @@ async function pushCloud(){
   } catch(e){ toast("推送失败：" + e.message, "err"); }
 }
 async function pullCloud(){
-  if (!ghReady()) { toast("请先填写仓库配置与 Token", "err"); return; }
+  if (!ghToken()) { toast("请先在同步弹窗填写 GitHub Token（需 repo 权限），其余项已预填默认", "err"); return; }
   toast("拉取中…");
   try {
     const res = await fetch(ghUrl(), { headers: ghHeaders() });

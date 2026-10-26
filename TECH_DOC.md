@@ -37,6 +37,7 @@
 | `rc_ticket_map` | 票种文本 → 场次类型（MX/HS/NS/FREE），跨场次记忆 |
 | `rc_config` | `{poolSizes:{MX:8,HS:7,NS:7,FREE:0}, partnerGap:0.5, github:{owner,repo,branch,path}}`（FREE=0 表示自由场不限容量、按场地均分） |
 | `rc_github_token` | GitHub Token（仅本地） |
+| `rc_config.github` | 同步仓库配置；弹窗预填默认 `owner=StudyingCoder1 / repo=badminton-data / branch=main / path=data/rating-grouping.json`（沿用旧站私有数据仓库，路径与旧站 `data/records.json` 互不干扰），通常只需填 Token |
 | `rc_results` | 最近 10 次分组结果 |
 | `rc_backups` | 自动备份（最多 5 份 / 1MB） |
 | `rc_court_names` | 场地号记忆池（下拉选项来源，新增/使用过的场地号自动累积） |
