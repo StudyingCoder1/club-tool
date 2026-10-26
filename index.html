@@ -221,6 +221,8 @@ const SESSIONS = {
   NS:  { label:"女双局",   pool:7, range:[1.5,2.5], femaleOnly:true },
   FREE:{ label:"3+自由场", pool:0, range:null }
 };
+/* 未评级默认档：按场次范围中位档参与（同档内按玩聚号排强弱），结果中标注 */
+const DEFAULT_LEVEL = { MX: 0.5, HS: 2, NS: 2 };
 const EPS = 1e-9;
 
 function ratingValue(r){ return (r in RATING_VALUE) ? RATING_VALUE[r] : null; }
@@ -453,9 +455,12 @@ function buildGrouping(input){
     const members = [...new Set(g.memberIds || [])].flatMap(id => slotsOf(String(id)));
     if (!members.length) continue;
     members.forEach(m => grouped.add(m.regId));
-    const vals = members.map(m => ratingValue(m.rating)).filter(v => v !== null);
-    const maxV = Math.max(...vals), minV = Math.min(...vals);
     const st0 = typeOf(members[0].ticket);
+    // 有效档位：未评级按该场次默认档参与（跨档判定同样基于有效档位）
+    const effOf = m => { const v = ratingValue(m.rating); return v !== null ? v : DEFAULT_LEVEL[st0]; };
+    const vals = st0 && DEFAULT_LEVEL[st0] !== undefined ? members.map(effOf)
+               : members.map(m => ratingValue(m.rating)).filter(v => v !== null);
+    const maxV = vals.length ? Math.max(...vals) : 0, minV = vals.length ? Math.min(...vals) : 0;
     const kept = st0 !== "FREE" && input.decisions && input.decisions[g.id] === "keep" && (maxV - minV) > 0.5 + EPS;
     const unit = {
       isGroup: true, groupId: g.id, groupName: g.name || `搭子组${g.id}`,
@@ -468,10 +473,11 @@ function buildGrouping(input){
     if (st && units[st]) units[st].push(unit);   // FREE 场不轮转，但分场时保持搭子同场
   }
 
-  /* 评级范围检查（I8）：搭子单元按组内最高评级判定 */
+  /* 评级范围检查（I8）：搭子单元按组内最高评级判定；未评级按场次默认档参与并计数 */
   for (const st of ["MX", "HS", "NS"]) {
     const range = SESSIONS[st].range;
     const okUnits = [];
+    let assumed = 0;
     for (const u of units[st]) {
       const maxOk = u.level >= range[0] - EPS && u.level <= range[1] + EPS;
       if (!maxOk) {
@@ -479,11 +485,13 @@ function buildGrouping(input){
         if (u.crossKept) { manual.push({ unit: u, reason }); warnings.push({ code: "CROSS-PLACE", msg: reason + "，已单列待人工放置" }); }
         else { u.members.forEach(m => unassigned.push({ p: m, reason })); warnings.push({ code: "RATING-MISMATCH", msg: reason }); }
       } else okUnits.push(u);
+      assumed += u.members.filter(m => ratingValue(m.rating) === null).length;
     }
     for (const p of sess[st]) {
       if (grouped.has(p.regId)) continue;
-      const v = ratingValue(p.rating);
-      if (v === null) { unassigned.push({ p, reason: "未评级（分组前检查应已处理）" }); continue; }
+      const raw = ratingValue(p.rating);
+      const v = raw !== null ? raw : DEFAULT_LEVEL[st];   // 未评级 → 默认档
+      if (raw === null) assumed++;
       if (v < range[0] - EPS || v > range[1] + EPS) {
         unassigned.push({ p, reason: `评级 ${p.rating} 超出${SESSIONS[st].label}准入（${range[0]}~${range[1]}）` });
         warnings.push({ code: "RATING-MISMATCH", msg: `${p.nickname}（${p.rating}）票种为${SESSIONS[st].label}，评级不匹配，已单列待处理` });
@@ -492,6 +500,7 @@ function buildGrouping(input){
       }
     }
     units[st] = okUnits;
+    if (assumed > 0) warnings.push({ code: "E04", msg: `${SESSIONS[st].label}有 ${assumed} 个名额未评级，已按默认档 ${fmtLevel(DEFAULT_LEVEL[st])} 参与分组（结果中以「默认」标注，同档内按玩聚号排序）` });
   }
 
   /* S4–S6 容量预检 + 贪心组池 + 梯度排序（按场次） */
@@ -738,16 +747,19 @@ function checkInvariants(result, input){
     const main = c.mainLevel;
     for (const m of c.members) {
       pooledIds.push(m.regId != null ? m.regId : m.playId);
-      const rv = ratingValue(m.rating);
-      if (rv === null) { v.push(`I6 ${c.name}: ${m.nickname} 无评级却在池中`); continue; }
+      const rv = m.unitLevel != null ? m.unitLevel : ratingValue(m.rating);
+      if (rv === null) { v.push(`I6 ${c.name}: ${m.nickname} 无有效档位却在池中`); continue; }
       if (!m.crossKept && Math.abs(rv - main) > 0.5 + EPS)
         v.push(`I1 ${c.name}: ${m.nickname}(${m.rating}) 与主档 ${fmtLevel(main)} 差超过0.5`);
     }
     // I4 女双全女
     if (c.sessionType === "NS") c.members.forEach(m => { if (m.gender === "男") v.push(`I4 ${c.name}: 男生 ${m.nickname}`); });
-    // I8 范围
+    // I8 范围（未评级按默认档的有效档位校验）
     const range = SESSIONS[c.sessionType].range;
-    if (range) c.members.forEach(m => { const rv = ratingValue(m.rating); if (rv !== null && !m.crossKept && (rv < range[0] - EPS || rv > range[1] + EPS)) v.push(`I8 ${c.name}: ${m.nickname}(${m.rating}) 超出${c.label}范围`); });
+    if (range) c.members.forEach(m => {
+      const rv = m.unitLevel != null ? m.unitLevel : ratingValue(m.rating);
+      if (rv !== null && !m.crossKept && (rv < range[0] - EPS || rv > range[1] + EPS)) v.push(`I8 ${c.name}: ${m.nickname}(${m.rating}) 超出${c.label}范围`);
+    });
     // I6 梯度序列：按单元档位非增（搭子组以组内最高评级占据档位，组内按玩聚号排）
     const byGrad = c.members.slice().sort((a, b) => a.gradient - b.gradient);
     for (let i = 1; i < byGrad.length; i++) {
@@ -999,11 +1011,11 @@ function renderReg(){
   // 同玩聚号名额计数（用于行内标记）
   const slotCnt = new Map();
   [...reg.participants, ...reg.waitlist].forEach(r => slotCnt.set(r.playId, (slotCnt.get(r.playId) || 0) + 1));
-  $("#regStats").textContent = `已报名 ${reg.participants.length} 个名额（${uniquePeople} 人${multiCnt ? `，同人多名额 ${multiCnt} 人` : ""}）　未匹配 ${unmatched.length} / 无评级 ${unrated.length}　候补 ${reg.waitlist.length}${q ? "　筛选 " + rows.length : ""}`;
+  $("#regStats").textContent = `已报名 ${reg.participants.length} 个名额（${uniquePeople} 人${multiCnt ? `，同人多名额 ${multiCnt} 人` : ""}）　新成员 ${unmatched.length} / 未评级 ${unrated.length}　候补 ${reg.waitlist.length}${q ? "　筛选 " + rows.length : ""}`;
   $("#regTable tbody").innerHTML = rows.map(r => {
     const m = memberOf(r.playId);
     const rr = regRating(r.playId);
-    const ratingHtml = rr === undefined ? `<span class="chip warn">未匹配</span>` : (rr === null ? `<span class="chip warn">未评级</span>` : esc(rr));
+    const ratingHtml = rr === undefined ? `<span class="chip info">新成员</span>` : (rr === null ? `<span class="chip warn">未评级</span>` : esc(rr));
     const past = m && m.pastNicknames && m.pastNicknames.length ? `<div class="muted">曾用：${esc(m.pastNicknames.join("、").slice(0,30))}</div>` : "";
     const st = r.status === "候补" ? `<span class="chip info">候补</span>` : (r.excluded ? `<span class="chip warn">已排除</span>` : `<span class="chip ok">已报名</span>`);
     const op = r.status === "候补"
@@ -1151,8 +1163,8 @@ function validateGrouping(){
   const personRows = [...byPerson.values()];
   const unmatched = personRows.filter(p => !memberOf(p.playId));
   const unratedKnown = personRows.filter(p => { const m = memberOf(p.playId); return m && !m.rating; });
-  if (unmatched.length) blocking.push({ code:"E03", msg:`${unmatched.length} 名报名者不在成员库（可在弹窗中一键补录）：${unmatched.map(p=>p.nickname).slice(0,8).join("、")}${unmatched.length>8?"…":""}`, rows: unmatched, kind:"unmatched" });
-  if (unratedKnown.length) blocking.push({ code:"E04", msg:`${unratedKnown.length} 名报名者未评级：${unratedKnown.map(p=>p.nickname).slice(0,8).join("、")}${unratedKnown.length>8?"…":""}`, rows: unratedKnown, kind:"unrated" });
+  if (unmatched.length) blocking.push({ code:"E03", msg:`${unmatched.length} 名新成员（成员库暂无记录）：${unmatched.map(p=>p.nickname).slice(0,8).join("、")}${unmatched.length>8?"…":""}——继续时将按报名表自动补录，可顺手评级`, rows: unmatched, kind:"unmatched" });
+  if (unratedKnown.length) blocking.push({ code:"E04", msg:`${unratedKnown.length} 名报名者未评级：${unratedKnown.map(p=>p.nickname).slice(0,8).join("、")}${unratedKnown.length>8?"…":""}——不评级将按默认档参与（萌新0.5 / 混双2 / 女双2）`, rows: unratedKnown, kind:"unrated" });
 
   for (const t in types) {
     if (!types[t]) blocking.push({ code:"E09", msg:`票种「${t}」未选择场次类型` });
@@ -1173,7 +1185,9 @@ function validateGrouping(){
       const sts = [...new Set(inActive.map(id => types[byId.get(id).ticket]))];
       if (sts.length > 1 || sts[0] == null) blocking.push({ code:"E06", msg:`搭子组「${g.name}」成员票种对应场次类型不一致（${sts.map(s=>s?SESSIONS[s].label:"未配置").join(" / ")}），无法同池` });
       else {
-        const vals = inActive.map(id => ratingValue(regRating(id))).filter(v => v !== null);
+        // 有效档位：未评级按该场次默认档（E07 跨档判定与分组口径一致）
+        const effOf = id => { const rr = regRating(id); if (rr != null) return ratingValue(rr); const d = DEFAULT_LEVEL[sts[0]]; return d !== undefined ? d : null; };
+        const vals = inActive.map(effOf).filter(v => v !== null);
         if (sts[0] !== "FREE" && vals.length >= 2 && Math.max(...vals) - Math.min(...vals) > 0.5 + EPS && crossDecisions[g.id] !== "split")
           confirmations.push({ code:"E07", group: g, maxV: Math.max(...vals), minV: Math.min(...vals) });
       }
@@ -1206,36 +1220,39 @@ function showQuickFix(fixables, v){
   const unrated = fixables.find(b => b.kind === "unrated");
   const nsMale = fixables.find(b => b.kind === "nsMale");
   let html = "";
-  if (unmatched) html += `<div class="errlist"><b>E03 未匹配成员（${unmatched.rows.length} 人）——选择评级后一键补录进成员库：</b>
-    ${unrated && unmatched.rows === unrated.rows ? "" : unmatched.rows.map(p => `<div style="display:flex;gap:8px;align-items:center;padding:4px 0"><span style="flex:1">${esc(p.nickname)}（${esc(p.playId)}·${esc(p.gender)}）</span><select class="qfRating" data-id="${esc(p.playId)}" data-nick="${esc(p.nickname)}" data-gender="${esc(p.gender)}"><option value="">未评级</option>${RATINGS.map(r=>`<option>${r}</option>`).join("")}</select></div>`).join("")}</div>`;
+  if (unmatched) html += `<div class="errlist" style="background:#e3f2fd;border-color:#bbdefb"><b>E03 新成员（${unmatched.rows.length} 人，成员库暂无记录）：</b>继续分组时将按报名表自动补录（昵称/玩聚号/性别）；认识的话可顺手评级，留空按默认档（萌新0.5 / 混双2 / 女双2）。
+    ${unmatched.rows.map(p => `<div style="display:flex;gap:8px;align-items:center;padding:4px 0"><span style="flex:1">${esc(p.nickname)}（${esc(p.playId)}·${esc(p.gender)}）</span><select class="qfRatingNew" data-id="${esc(p.playId)}"><option value="">默认档</option>${RATINGS.map(r=>`<option>${r}</option>`).join("")}</select></div>`).join("")}
+    <div class="muted" style="margin-top:6px">提示：活动后从小程序导出最新成员表，在「俱乐部成员明细」导入即可自动合并新成员资料与最新昵称。</div></div>`;
   if (unrated) {
-    const rows = unrated.rows.filter(p => unmatched && unmatched.rows.includes(p) ? false : true);
-    if (rows.length) html += `<div class="errlist" style="background:#fff8e1;border-color:#ffe082"><b>E04 未评级成员（${rows.length} 人）——请补选评级：</b>
-      ${rows.map(p => `<div style="display:flex;gap:8px;align-items:center;padding:4px 0"><span style="flex:1">${esc(p.nickname)}（${esc(p.playId)}）</span><select class="qfRating2" data-id="${esc(p.playId)}"><option value="">未评级</option>${RATINGS.map(r=>`<option>${r}</option>`).join("")}</select></div>`).join("")}</div>`;
+    const rows = unrated.rows.filter(p => !(unmatched && unmatched.rows.includes(p)));
+    if (rows.length) html += `<div class="errlist" style="background:#fff8e1;border-color:#ffe082"><b>E04 未评级成员（${rows.length} 人）：</b>可顺手补选评级；<b>留空即按默认档参与</b>（萌新0.5 / 混双2 / 女双2，同档内按玩聚号排序，结果中有标注）。
+      ${rows.map(p => `<div style="display:flex;gap:8px;align-items:center;padding:4px 0"><span style="flex:1">${esc(p.nickname)}（${esc(p.playId)}）</span><select class="qfRating2" data-id="${esc(p.playId)}"><option value="">默认档</option>${RATINGS.map(r=>`<option>${r}</option>`).join("")}</select></div>`).join("")}</div>`;
   }
-  if (nsMale) html += `<div class="errlist"><b>E08 女双票种含男生（${nsMale.rows.length} 人）：</b>${nsMale.rows.map(p=>esc(p.nickname)).join("、")}<br><label style="margin-top:6px;display:flex;gap:6px;align-items:center"><input type="checkbox" id="qfExcludeMales" checked>将这些男生标记为「已排除」（不出现在任何场次）</label></div>`;
+  if (nsMale) html += `<div class="errlist"><b>E08 女双票种含男生（${nsMale.rows.length} 人）：</b>${nsMale.rows.map(p=>esc(p.nickname)).join("、")}<br><label style="margin-top:6px;display:flex;gap:6px;align-items:center"><input type="checkbox" id="qfExcludeMales" checked>将这些男生（含其全部名额）标记为「已排除」</label></div>`;
   openModal("分组前检查", html, [
     { label:"取消", ghost:true },
-    { label:"应用并继续", onClick(box){
-      const emptySel = [...box.querySelectorAll("select")].some(s => !s.value);
-      const stillUnratedRows = [];
-      box.querySelectorAll(".qfRating, .qfRating2").forEach(s => {
-        const id = s.dataset.id;
-        let m = members.find(x => String(x.playId) === id);
-        if (!m) { m = { playId:id, nickname:s.dataset.nick || id, pastNicknames:[], gender:s.dataset.gender || "未知", rating:null, updatedAt:Date.now() }; members.push(m); }
-        if (s.value) m.rating = s.value;
-        else stillUnratedRows.push(m.nickname);
+    { label:"继续分组", onClick(box){
+      // 新成员自动补录（按报名表信息），选了评级的顺手写入
+      if (unmatched) unmatched.rows.forEach(p => {
+        const sel = box.querySelector(`.qfRatingNew[data-id="${CSS.escape(p.playId)}"]`) || box.querySelector(`.qfRatingNew[data-id="${p.playId}"]`);
+        let m = members.find(x => String(x.playId) === p.playId);
+        if (!m) { m = { playId: p.playId, nickname: p.nickname, pastNicknames: [], gender: p.gender, rating: null, joinCount: 0, cancelCount: 0, updatedAt: Date.now() }; members.push(m); }
+        if (sel && sel.value) m.rating = sel.value;
       });
-      if (emptySel && stillUnratedRows.length) { toast(`仍有 ${stillUnratedRows.length} 人未评级（未评级不能分组）`, "err"); saveMembers(); renderMembers(); return true; }
-      if (box.querySelector("#qfExcludeMales") && box.querySelector("#qfExcludeMales").checked)
-        nsMale && nsMale.rows.forEach(p => reg.participants.forEach(x => { if (x.playId === p.playId) x.excluded = true; }));
+      // 应用选填的评级（留空 = 默认档）
+      box.querySelectorAll(".qfRating2").forEach(s => {
+        if (!s.value) return;
+        const m = members.find(x => String(x.playId) === s.dataset.id);
+        if (m) m.rating = s.value;
+      });
+      if (nsMale && box.querySelector("#qfExcludeMales") && box.querySelector("#qfExcludeMales").checked)
+        nsMale.rows.forEach(p => reg.participants.forEach(x => { if (x.playId === p.playId) x.excluded = true; }));
       store.write("rc_reg", reg);
       saveMembers(); renderMembers(); renderReg();
       const v2 = validateGrouping();
       const hards = v2.blocking.filter(b => !b.rows);
       if (hards.length) { setTimeout(()=>showBlocking(hards), 120); return false; }
       proceedConfirmations(v2.confirmations, []);
-      toast("检查已应用", "ok");
     }}]);
 }
 function proceedConfirmations(remaining, resolved){
@@ -1315,7 +1332,7 @@ function renderResult(){
       <div class="ctitle"><span>${esc(c.name)} · ${esc(c.label)}</span><span class="muted">${c.members.length}人${c.underfull?" ⚠未满池":""}</span></div>
       <ul>${c.members.map(m => `<li><span class="grad">${m.gradient||""}</span><b>${esc(m.nickname)}</b>
         <span class="${m.gender==="女"?"female":"male"}">${m.gender==="女"?"♀":"♂"}</span>
-        <span class="muted">${esc(m.rating||"")}</span>
+        <span class="muted">${m.rating ? esc(m.rating) : (m.unitLevel != null && c.sessionType !== "FREE" ? "默认"+fmtLevel(m.unitLevel) : "")}</span>
         ${m.groupName?`<span class="tag">${esc(m.groupName)}</span>`:""}
         ${m.crossKept?`<span class="tag" style="background:#ffe9c8">跨档搭子</span>`:""}</li>`).join("")}</ul>
     </div>`).join("");
@@ -1340,14 +1357,19 @@ function exportResult(){
   const overview = [["场地","类型","人数","等级分布","女生数","备注"],
     ...r.courts.map(c => {
       const dist = {}; let f = 0;
-      c.members.forEach(m => { dist[m.rating||"?"] = (dist[m.rating||"?"]||0)+1; if (m.gender==="女") f++; });
+      c.members.forEach(m => {
+        const key = m.rating || (m.unitLevel != null && c.sessionType !== "FREE" ? "默认"+fmtLevel(m.unitLevel) : "?");
+        dist[key] = (dist[key] || 0) + 1; if (m.gender === "女") f++;
+      });
       return [c.name, c.label, c.members.length, Object.entries(dist).map(([k,n])=>k+"×"+n).join(" "), f, c.underfull?"未满池":""]; }),
     [], ["溢出/候补人数", r.overflow.length], ["未成池/待处理人数", r.unassigned.length + r.manual.length],
     ["生成时间", new Date(ts).toLocaleString()], ["活动", (a&&a.title)||""]];
   const ws1 = XLSX.utils.aoa_to_sheet(overview); ws1["!cols"] = [{wch:14},{wch:10},{wch:6},{wch:26},{wch:7},{wch:10}];
   XLSX.utils.book_append_sheet(wb, ws1, "分组总览");
   const list = [["场地","类型","梯度","轮转序","昵称","评级","性别","玩聚号","标记"]];
-  r.courts.forEach(c => c.members.forEach(m => list.push([c.name, c.label, m.gradient||"", m.rotation||"", m.nickname, m.rating||"", m.gender, m.playId, [m.groupName, m.crossKept?"跨档搭子":""].filter(Boolean).join("/") ])));
+  r.courts.forEach(c => c.members.forEach(m => list.push([c.name, c.label, m.gradient||"", m.rotation||"", m.nickname,
+    m.rating || (m.unitLevel != null && c.sessionType !== "FREE" ? "默认"+fmtLevel(m.unitLevel) : ""),
+    m.gender, m.playId, [m.groupName, m.crossKept?"跨档搭子":""].filter(Boolean).join("/") ])));
   const ws2 = XLSX.utils.aoa_to_sheet(list); ws2["!cols"] = [{wch:12},{wch:9},{wch:6},{wch:7},{wch:16},{wch:6},{wch:6},{wch:11},{wch:12}];
   XLSX.utils.book_append_sheet(wb, ws2, "各场地名单");
   const warn = [["类型","内容"]];
