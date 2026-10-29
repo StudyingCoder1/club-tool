@@ -732,9 +732,9 @@ function buildGrouping(input){
     if (st !== "NS") {
       balanceFemalesAcrossPools(pools);
       // 等级梯队隔离导致无法跨池调配时，向组织者说明
-      const fcs = pools.map(p => p.units.reduce((s, u) => s + (u.members.some(m => m.gender === "女") ? u.size : 0), 0));
+      const fcs = pools.map(p => p.units.reduce((s, u) => s + u.members.reduce((a, m) => a + (m.gender === "女" ? 1 : 0), 0), 0));
       if (fcs.length > 1 && Math.max(...fcs) - Math.min(...fcs) > 1)
-        warnings.push({ code: "F-BALANCE", msg: `${SESSIONS[st].label}各场地女生数为 ${fcs.join("/")}，因等级梯队限制（跨档不混池）无法进一步均衡，如需均衡可调整成员评级` });
+        warnings.push({ code: "F-BALANCE", msg: `${SESSIONS[st].label}各场地女生数为 ${fcs.join("/")}，其余场地已无可对换的男生个人名额（多为搭子组）或仅一块场地，无法进一步均衡` });
     }
     // 互斥对调换：同池的互斥成员尽量分离（只动个人；无可用场地则保留并提示）
     if (input.excludePairs && input.excludePairs.length)
@@ -766,6 +766,7 @@ function buildGrouping(input){
           gradient: m.__grad, rotation: idx + 1,
           unitLevel: m.__unitLevel != null ? m.__unitLevel : ratingValue(m.rating),
           clampedTo: m.__clampTo != null ? fmtLevel(m.__clampTo) : null,
+          genderBal: !!m.__gb,
           groupId: m.__groupId || null, groupName: m.__groupName || null,
           crossKept: !!m.__cross
         }))
@@ -973,11 +974,15 @@ function applyExclusions(pools, pairs, st, warnings){
 /* 女生跨池均衡：同场次各池女生数尽量接近（差 ≤1）。
  * 只交换"个人单元"（不拆搭子组、不动跨档保留组），同等级优先对换；
  * 对换需同时满足双方池的主档 ±0.5 约束，等级归属与容量不变 */
+/* 女生跨池均衡（2026-10-30 v2.8：按人头计数；男女均衡优先于等级梯队）：
+ * 女生数按成员实际性别统计（混性别搭子组只计其中女生，不再整组计入）；
+ * 对换优先级：同等级 → 双方主档±0.5 → 放宽等级限制（跨档调换，成员标注 genderBal）。
+ * 仍只动个人单元（不拆搭子组/跨档保留组），容量与等级梯度序不变 */
 function balanceFemalesAcrossPools(pools){
   if (!pools.length) return pools;
-  const fCount = p => p.units.reduce((s, u) => s + (u.members.some(m => m.gender === "女") ? u.size : 0), 0);
+  const fCount = p => p.units.reduce((s, u) => s + u.members.reduce((a, m) => a + (m.gender === "女" ? 1 : 0), 0), 0);
   const indiv = (p, gender) => p.units.filter(u => !u.isGroup && !u.crossKept && u.members[0].gender === gender);
-  let guard = 100;
+  let guard = 200;
   while (guard-- > 0) {
     const counts = pools.map(fCount);
     const maxC = Math.max(...counts), minC = Math.min(...counts);
@@ -992,11 +997,15 @@ function balanceFemalesAcrossPools(pools){
       const fem = indiv(src, "女")[0];
       if (!fem) break;
       const males = indiv(dst, "男");
-      const male = males.find(u => u.level === fem.level) ||
-        males.find(u => Math.abs(fem.level - dst.main) <= 0.5 + EPS && Math.abs(u.level - src.main) <= 0.5 + EPS);
-      if (!male) continue;
+      if (!males.length) continue;
+      const byDist = males.slice().sort((a, b) => Math.abs(a.level - fem.level) - Math.abs(b.level - fem.level));
+      let male = byDist.find(u => u.level === fem.level);
+      if (!male) male = byDist.find(u => Math.abs(fem.level - dst.main) <= 0.5 + EPS && Math.abs(u.level - src.main) <= 0.5 + EPS);
+      if (!male) male = byDist[0];   // 男女均衡优先于等级梯队：就近选男生跨档对换
       src.units = src.units.filter(u => u !== fem); src.units.push(male);
       dst.units = dst.units.filter(u => u !== male); dst.units.push(fem);
+      if (Math.abs(fem.level - dst.main) > 0.5 + EPS) fem.members.forEach(m => { m.__gb = true; });
+      if (Math.abs(male.level - src.main) > 0.5 + EPS) male.members.forEach(m => { m.__gb = true; });
       moved = true; break;
     }
     if (!moved) break;
@@ -1004,7 +1013,7 @@ function balanceFemalesAcrossPools(pools){
   return pools;
 }
 
-/* S6 池内梯度排序（评级↓ 玩聚号↑，搭子相邻）+ S7 女生均衡 */
+
 function finalizePool(pool, st){
   pool.units.sort((a, b) => (b.level - a.level) || (a.key - b.key));
   const flat = [];
@@ -1049,7 +1058,7 @@ function checkInvariants(result, input){
       pooledIds.push(m.regId != null ? m.regId : m.playId);
       const rv = m.unitLevel != null ? m.unitLevel : ratingValue(m.rating);
       if (rv === null) { v.push(`I6 ${c.name}: ${m.nickname} 无有效档位却在池中`); continue; }
-      if (!m.crossKept && Math.abs(rv - main) > 0.5 + EPS)
+      if (!m.crossKept && !m.genderBal && Math.abs(rv - main) > 0.5 + EPS)
         v.push(`I1 ${c.name}: ${m.nickname}(${m.rating}) 与主档 ${fmtLevel(main)} 差超过0.5`);
     }
     // I4 女双全女
@@ -1116,7 +1125,7 @@ function checkInvariants(result, input){
 
 <script>
 /* ═════════════════════════ 应用层（UI / 存储 / 同步） ═════════════════════════ */
-const APP_VERSION = "v2.7（2026-10-30）";
+const APP_VERSION = "v2.9（2026-10-30）";
 (function(){
 "use strict";
 const $ = s => document.querySelector(s);
@@ -1936,7 +1945,7 @@ function renderResult(){
         <span class="${m.gender==="女"?"female":"male"}">${m.gender==="女"?"♀":"♂"}</span>
         <span class="muted">${m.rating ? (m.clampedTo ? esc(m.rating) + "·按" + esc(m.clampedTo) + "档" : esc(m.rating)) : (m.unitLevel != null && c.sessionType !== "FREE" ? "默认"+fmtLevel(m.unitLevel) : "")}</span>
         ${m.groupName?`<span class="tag">${esc(m.groupName)}</span>`:""}
-        ${m.crossKept?`<span class="tag" style="background:#ffe9c8">跨档搭子</span>`:""}</li>`).join("")}</ul>
+        ${m.genderBal?`<span class="tag" style="background:#e3f2fd">均衡调位</span>`:""}${m.crossKept?`<span class="tag" style="background:#ffe9c8">跨档搭子</span>`:""}</li>`).join("")}</ul>
     </div>`).join("");
   renderHistory();
 }
@@ -2037,7 +2046,7 @@ function exportResult(){
   r.courts.forEach(c => c.members.forEach(m => list.push([c.name, c.label, m.gradient||"", m.rotation||"",
     m.displayName || m.nickname,
     m.clampedTo ? m.rating + "→按" + m.clampedTo + "档" : (m.rating || (m.unitLevel != null && c.sessionType !== "FREE" ? "默认"+fmtLevel(m.unitLevel) : "")),
-    m.gender, m.playId, [m.groupName, m.crossKept?"跨档搭子":""].filter(Boolean).join("/") ])));
+    m.gender, m.playId, [m.groupName, m.crossKept?"跨档搭子":"", m.genderBal?"均衡调位":""].filter(Boolean).join("/") ])));
   const ws3 = XLSX.utils.aoa_to_sheet(list); ws3["!cols"] = [{wch:12},{wch:9},{wch:6},{wch:7},{wch:16},{wch:10},{wch:6},{wch:11},{wch:12}];
   { const cell = ws3["A1"]; if (cell) cell.s = { fill: { patternType: "solid", fgColor: { rgb: headFont.fill } }, font: { bold: true, color: { rgb: headFont.font } } }; }
   XLSX.utils.book_append_sheet(wb, ws3, "名单明细");
@@ -2061,13 +2070,18 @@ const DEFAULT_COPY_FOOTER = [
 function buildCopyText(){
   const { result: r, activity: a } = lastResult;
   const shortName = { MX: "萌新养生", HS: "微微对抗", NS: "女双对抗", FREE: "3+自由场" };
-  // 组字母：同场次内按顺序 A、B、C…
-  const seqCnt = {}, letterOf = new Map();
-  r.courts.forEach(c => { seqCnt[c.sessionType] = (seqCnt[c.sessionType] || 0) + 1; letterOf.set(c, String.fromCharCode(64 + seqCnt[c.sessionType])); });
-  // 场地名全部为「N号场」时按场地号排序（对齐"16号场…22号场"的习惯）；自动名（萌新1场等）保持场次分组顺序
+  // 按场地号从小到大排序（N号场取数字；无场地号的排在最后保持原序）
   const courtNo = c => { const m = String(c.name).trim().match(/^(\d+)\s*号场/); return m ? +m[1] : null; };
-  const ordered = r.courts.length && r.courts.every(c => courtNo(c) !== null)
-    ? r.courts.slice().sort((x, y) => courtNo(x) - courtNo(y)) : r.courts;
+  const ordered = r.courts.slice().sort((x, y) => {
+    const nx = courtNo(x), ny = courtNo(y);
+    if (nx !== null && ny !== null) return nx - ny;
+    if (nx !== null) return -1;
+    if (ny !== null) return 1;
+    return 0;
+  });
+  // 组字母：同场次内按场地号从小到大依次 A、B、C…（场地号最小的为 A组）
+  const seqCnt = {}, letterOf = new Map();
+  ordered.forEach(c => { seqCnt[c.sessionType] = (seqCnt[c.sessionType] || 0) + 1; letterOf.set(c, String.fromCharCode(64 + seqCnt[c.sessionType])); });
   let txt = "";
   const full = (a && (a.titleFull || a.title)) || "";
   if (full.trim()) txt += full.trim() + "\n";
