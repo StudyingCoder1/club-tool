@@ -6,7 +6,7 @@
 ## 1. 形态与技术
 
 - 单文件原生应用：`index.html`（无框架、无构建）。部署 = 上传该文件到 GitHub Pages 等静态托管。
-- Excel 解析/导出：SheetJS（CDN `xlsx@0.18.5`）。CDN 失联时上传入口给出降级提示。
+- Excel 解析/导出：**xlsx-js-style@1.2.0**（CDN `dist/xlsx.bundle.js`，API 兼容 SheetJS，支持单元格样式用于彩色分块导出）。⚠️ 版本只有到 1.2.0（写 1.2.1 会 404，2026-10-30 的一次真实事故）。**多源兜底**：`ensureXLSX()` 在 jsdelivr 失败时自动换 unpkg → npmmirror（国内镜像），所有导入/导出入口均经它加载；全部失败才提示。
 - 存储：localStorage（前缀 `rc_`）。云端同步：GitHub Contents API + Token（手动推送/拉取）。
 - 交互约定：不用 `prompt()/confirm()/alert()`（微信内置浏览器不支持）；用 Toast + 模态弹窗；危险操作二次确认；覆盖性写入前自动备份。
 

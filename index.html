@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>羽毛球俱乐部评级分组工具</title>
-<script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.1/dist/xlsx.bundle.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
 <style>
 /* ═══════════ 设计变量 ═══════════ */
 :root{
@@ -1106,7 +1106,7 @@ function checkInvariants(result, input){
 
 <script>
 /* ═════════════════════════ 应用层（UI / 存储 / 同步） ═════════════════════════ */
-const APP_VERSION = "v2.5（2026-10-29）";
+const APP_VERSION = "v2.6（2026-10-30）";
 (function(){
 "use strict";
 const $ = s => document.querySelector(s);
@@ -1200,10 +1200,28 @@ const ratingSel = $("#memberRatingFilter");
 RATINGS.concat(["3+"]).forEach(r => { if (![...ratingSel.options].some(o => o.value === r)) { const o = document.createElement("option"); o.value = r; o.textContent = r; ratingSel.appendChild(o); } });
 { const o = document.createElement("option"); o.value = "__none"; o.textContent = "未评级"; ratingSel.appendChild(o); }
 
-$("#btnImportMembers").onclick = () => { if (checkXLSX()) $("#fileMembers").click(); };
+/* ── Excel 引擎多源加载：主 CDN 失败时自动尝试备用源（unpkg / npmmirror 国内镜像） ── */
+const XLSX_CDNS = [
+  "https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js",
+  "https://unpkg.com/xlsx-js-style@1.2.0/dist/xlsx.bundle.js",
+  "https://registry.npmmirror.com/xlsx-js-style/1.2.0/files/dist/xlsx.bundle.js"
+];
+function ensureXLSX(cb){
+  if (typeof XLSX !== "undefined") return cb(true);
+  let i = 0;
+  const tryNext = () => {
+    if (i >= XLSX_CDNS.length) { toast("Excel 解析组件加载失败：已尝试多个CDN仍不可用，请检查网络后刷新页面", "err"); return cb(false); }
+    const s = document.createElement("script");
+    s.src = XLSX_CDNS[i++];
+    s.onload = () => (typeof XLSX !== "undefined") ? cb(true) : tryNext();
+    s.onerror = tryNext;
+    document.head.appendChild(s);
+  };
+  toast("Excel 组件加载中（自动切换可用线路）…");
+  tryNext();
+}
+$("#btnImportMembers").onclick = () => ensureXLSX(ok => { if (ok) $("#fileMembers").click(); });
 $("#fileMembers").onchange = e => { const f = e.target.files[0]; if (f) importMembers(f); e.target.value = ""; };
-function checkXLSX(){ if (typeof XLSX === "undefined"){ toast("Excel 解析组件（CDN）加载失败，请检查网络后刷新页面", "err"); return false; } return true; }
-
 function importMembers(file){
   const reader = new FileReader();
   reader.onload = ev => {
@@ -1256,7 +1274,7 @@ $("#memberSearch").oninput = renderMembers;
 ratingSel.onchange = renderMembers;
 $("#memberGenderFilter").onchange = renderMembers;
 
-$("#btnExportMembers").onclick = () => {
+$("#btnExportMembers").onclick = () => ensureXLSX(() => {
   if (!members.length) { toast("成员库为空", "err"); return; }
   const aoa = [["玩聚号","昵称","过往昵称","性别","羽毛球等级(人工)","自评水平","羽毛球标签","参与次数","取消次数","最后参与时间"]];
   members.slice().sort((a,b)=>num2(a.playId)-num2(b.playId)).forEach(m => aoa.push([m.playId, m.nickname, (m.pastNicknames||[]).join("、"), m.gender, m.rating||"", m.selfLevel||"", m.tag||"", m.joinCount||0, m.cancelCount||0, m.lastJoinAt||""]));
@@ -1266,7 +1284,7 @@ $("#btnExportMembers").onclick = () => {
   XLSX.utils.book_append_sheet(wb, ws, "成员明细");
   XLSX.writeFile(wb, `成员明细_${todayStr()}.xlsx`);
   toast("已导出成员明细", "ok");
-};
+});
 function num2(id){ return parseInt(String(id).replace(/^0+/,"")||"0",10); }
 function todayStr(){ const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; }
 
@@ -1285,7 +1303,7 @@ function gotoStep(n){
 }
 
 /* ── 步骤1：报名表 ── */
-$("#btnImportReg").onclick = () => { if (checkXLSX()) $("#fileReg").click(); };
+$("#btnImportReg").onclick = () => ensureXLSX(ok => { if (ok) $("#fileReg").click(); });
 $("#fileReg").onchange = e => { const f = e.target.files[0]; if (f) importReg(f); e.target.value = ""; };
 $("#btnClearReg").onclick = () => openModal("清空报名数据", "<p>将清空本次报名表、搭子绑定与分组结果（成员库不受影响），继续？</p>",
   [{label:"取消",ghost:true},{label:"确认清空",danger:true,onClick(){ reg=null; localStorage.removeItem("rc_reg"); partnerGroups=[]; crossDecisions={}; allowOverflow=false; lastResult=null; saveGroups(); renderReg(); renderPartners(); renderTickets(); renderResult(); toast("已清空"); }}]);
@@ -1856,7 +1874,7 @@ function renderHistory(){
   });
 }
 $("#btnRegroup").onclick = () => gotoStep(3);
-$("#btnExportResult").onclick = () => { if (!lastResult) { toast("先完成分组", "err"); return; } exportResult(); };
+$("#btnExportResult").onclick = () => { if (!lastResult) { toast("先完成分组", "err"); return; } ensureXLSX(() => exportResult()); };
 function exportResult(){
   const { result: r, activity: a, ts } = lastResult;
   const wb = XLSX.utils.book_new();
