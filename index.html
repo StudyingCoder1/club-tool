@@ -632,7 +632,13 @@ function buildGrouping(input){
   const units = { MX: [], HS: [], NS: [], FREE: [] };
   for (const g of (input.partnerGroups || [])) {
     if (input.decisions && input.decisions[g.id] === "split") continue;   // E07 选择拆分 → 各自独立参与
-    const perPerson = [...new Set(g.memberIds || [])].map(id => slotsOf(String(id))).filter(slots => slots.length);
+    // 名额级绑定：memberTickets 记录了每人绑定的票种（名额）；有则精确取该票种名额，无则按人取全部（旧数据）
+    const slotsFor = id => {
+      const mine = slotsOf(String(id));
+      const tk = g.memberTickets && g.memberTickets[String(id)];
+      return tk ? mine.filter(s => s.ticket === tk) : mine;
+    };
+    const perPerson = [...new Set(g.memberIds || [])].map(id => slotsFor(id)).filter(slots => slots.length);
     if (!perPerson.length) continue;
     // 组的场次类型 = 全员共有类型（取首位成员最早报名的共有类型）；只绑定该场次的名额。
     // 一人报名多个场次时，其在其他场次的名额不被搭子组"拖走"，仍按个人正常参与。
@@ -924,20 +930,24 @@ function setBucket(map, k, arr){ if (arr.length) map.set(k, arr); else map.delet
 /* 互斥调换：互斥对若落入同池，尽量把其中一方（个人单元）换到其他场地；
  * 换不动（无同档可换/其他场地已满绑定单元）则保留同池并提示——"除非无法分出去" */
 function applyExclusions(pools, pairs, st, warnings){
-  const findIndiv = playId => {
+  const findIndiv = (playId, ticket) => {
     for (const p of pools) {
-      const u = p.units.find(x => !x.isGroup && x.members[0].playId === String(playId));
+      const u = p.units.find(x => !x.isGroup && x.members[0].playId === String(playId) &&
+        (!ticket || x.members[0].ticket === ticket));
       if (u) return { pool: p, unit: u };
     }
     return null;
   };
   for (const pr of pairs) {
     const [aId, bId] = pr.memberIds;
-    const A = findIndiv(aId), B = findIndiv(bId);
+    const tkA = pr.memberTickets && pr.memberTickets[String(aId)];
+    const tkB = pr.memberTickets && pr.memberTickets[String(bId)];
+    const A = findIndiv(aId, tkA), B = findIndiv(bId, tkB);
     if (!A || !B) {
       // 任一方在搭子组内（不可拆）：若同池则提示无法互斥
-      const poolOf = id => pools.find(p => p.units.some(u => u.members.some(m => m.playId === String(id))));
-      if (poolOf(aId) && poolOf(aId) === poolOf(bId))
+      const poolOf = (id, tk) => pools.find(p => p.units.some(u => u.members.some(m =>
+        m.playId === String(id) && (!tk || m.ticket === tk))));
+      if (poolOf(aId, tkA) && poolOf(aId, tkA) === poolOf(bId, tkB))
         warnings.push({ code: "EXCLUDE", msg: `互斥的 ${pr.name || aId + "/" + bId} 中有搭子组成员且无法分离，仍同场，请留意` });
       continue;
     }
@@ -1106,7 +1116,7 @@ function checkInvariants(result, input){
 
 <script>
 /* ═════════════════════════ 应用层（UI / 存储 / 同步） ═════════════════════════ */
-const APP_VERSION = "v2.6（2026-10-30）";
+const APP_VERSION = "v2.7（2026-10-30）";
 (function(){
 "use strict";
 const $ = s => document.querySelector(s);
@@ -1419,15 +1429,20 @@ $("#btnAddGroup").onclick = () => {
 function renderPartners(){
   if (!reg) { $("#pgroups").innerHTML = `<div class="empty">请先在步骤①上传报名表</div>`; return; }
   const active = reg.participants.filter(p => !p.excluded);
+  const disp = computeDisplayNames(active);
+  const typeLabel = t => { const ty = ticketMap[t] || suggestSessionType(t); return SESSIONS[ty] ? SESSIONS[ty].label : ""; };
   if (!partnerGroups.length) { $("#pgroups").innerHTML = `<div class="empty">暂无搭子组。点击「新增搭子组」，把已私聊报备的组合绑定起来（分组时同池且相邻，不会被拆开）。</div>`; return; }
   $("#pgroups").innerHTML = partnerGroups.map(g => {
-    const mem = g.memberIds.map(id => active.find(p => p.playId === id)).filter(Boolean);
+    const mem = g.memberIds.map(id => {
+      const tk = g.memberTickets && g.memberTickets[String(id)];
+      return active.find(p => p.playId === id && (!tk || p.ticket === tk)) || active.find(p => p.playId === id);
+    }).filter(Boolean);
     const vals = mem.map(p => ratingValue(regRating(p.playId))).filter(v => v !== null);
     const diff = vals.length >= 2 ? Math.max(...vals) - Math.min(...vals) : 0;
     const warn = diff > 0.5 + EPS ? `<span class="chip warn">组内评级差 ${diff.toFixed(1)}，分组前需确认</span>` : "";
     return `<div class="pgroup" data-gid="${esc(g.id)}"><div class="ghead"><b>${esc(g.name)}</b>${g.court ? `<span class="chip info">指定${esc(g.court)}</span>` : ""}${warn}
       <span style="flex:1"></span><button class="btn small ghost" data-act="edit">编辑</button><button class="btn small danger" data-act="del">删除</button></div>
-      <div class="memberchips">${mem.map(p => `<span class="mchip">${esc(p.nickname)}<span class="muted">${esc(regRating(p.playId)||"?")}</span></span>`).join("") || '<span class="muted">（空组）</span>'}</div></div>`;
+      <div class="memberchips">${mem.map(p => `<span class="mchip">${esc(disp.get(p.regId) || p.nickname)}<span class="muted">${esc(typeLabel(p.ticket))} · ${esc(regRating(p.playId)||"?")}</span></span>`).join("") || '<span class="muted">（空组）</span>'}</div></div>`;
   }).join("");
   $$("#pgroups .pgroup").forEach(el => {
     const g = partnerGroups.find(x => String(x.id) === el.dataset.gid);
@@ -1435,48 +1450,81 @@ function renderPartners(){
     el.querySelector('[data-act=del]').onclick = () => openModal("删除搭子组", `确认删除「${esc(g.name)}」？`, [{label:"取消",ghost:true},{label:"删除",danger:true,onClick(){ partnerGroups = partnerGroups.filter(x => x !== g); saveGroups(); renderPartners(); }}]);
   });
 }
+
 function openGroupEditor(g){
-  // 选择器按人（玩聚号）去重展示——选中即绑定该人全部名额；
-  // 已加入「其他」搭子组的人不再出现在候选里（一人同时只属一组；编辑本组时本组成员保留）
-  const inOther = new Set();
-  partnerGroups.forEach(x => { if (x !== g) (x.memberIds || []).forEach(id => inOther.add(String(id))); });
-  const active = []; const seenP = new Set();
-  reg.participants.filter(p => !p.excluded).forEach(p => {
-    if (seenP.has(p.playId) || inOther.has(String(p.playId))) return;
-    seenP.add(p.playId); active.push(p);
+  // 名额级选择：候选按「玩聚号+票种」列出（同人多名额显示 文文/文文1 + 场次标签），
+  // 同人不同场次的名额可分别绑定到不同组；同票种的多个名额一并绑定
+  const active = reg.participants.filter(p => !p.excluded);
+  const disp = computeDisplayNames(active);
+  const typeLabel = t => { const ty = ticketMap[t] || suggestSessionType(t); return SESSIONS[ty] ? SESSIONS[ty].label : "未配场次"; };
+  // 已被其他组占用的名额（旧数据无票种记录 → 该人全部名额视为占用）
+  const occupied = new Set();
+  partnerGroups.forEach(x => { if (x === g) return;
+    (x.memberIds || []).forEach(id => {
+      if (x.memberTickets && x.memberTickets[String(id)]) occupied.add(String(id) + "∮" + x.memberTickets[String(id)]);
+      else active.filter(p => p.playId === String(id)).forEach(sl => occupied.add(sl.playId + "∮" + sl.ticket));
+    });
   });
-  const selected = new Set(g ? g.memberIds : []);
+  const slots = []; const seen = new Set(); const slotCnt = new Map();
+  active.forEach(p => {
+    const k = p.playId + "∮" + p.ticket;
+    slotCnt.set(k, (slotCnt.get(k) || 0) + 1);
+    if (seen.has(k) || occupied.has(k)) return;
+    seen.add(k); slots.push(p);
+  });
+  const selected = new Map();   // playId → ticket
+  if (g) (g.memberIds || []).forEach(id => {
+    const tk = g.memberTickets && g.memberTickets[String(id)];
+    active.filter(p => p.playId === String(id) && (!tk || p.ticket === tk))
+      .forEach(p => { if (!selected.has(p.playId)) selected.set(p.playId, p.ticket); });
+  });
   openModal(g ? "编辑搭子组" : "新增搭子组", `
     <label class="field"><span>组名（如：A组）</span><input type="text" id="gName" value="${esc(g ? g.name : "搭子组"+(partnerGroups.length+1))}"></label>
     <label class="field" style="margin-top:10px"><span>指定场地号（可选，如 17号场；该场存在则整组落在该场，不存在随机分配）</span>
       <input type="text" id="gCourt" list="courtNameList" placeholder="留空自动分配" value="${esc(g && g.court || "")}"></label>
     <datalist id="courtNameList">${courtNamePool().map(n => `<option value="${esc(n)}">`).join("")}</datalist>
     <div style="margin-top:10px"><input type="text" id="gSearch" placeholder="搜索昵称/玩聚号…" style="width:100%"></div>
-    ${inOther.size ? `<div class="muted" style="margin-top:4px">已有 ${inOther.size} 人加入其他搭子组，不在下方候选列表中</div>` : ""}
     <div id="gSelChips" style="margin:8px 0"></div>
-    <div id="gList" style="max-height:300px; overflow:auto; border:1px solid var(--line); border-radius:8px"></div>`,
+    <div id="gList" style="max-height:300px; overflow:auto; border:1px solid var(--line); border-radius:8px"></div>
+    <p class="muted" style="margin-top:6px">只能勾选同一场次类型的名额（保存时校验）；同票种的多个名额会整批绑定。</p>`,
     [{label:"取消",ghost:true},{label:"保存",onClick(box){
       const name = box.querySelector("#gName").value.trim() || "未命名组";
       const court = box.querySelector("#gCourt").value.trim() || null;
-      const ids = [...selected];   // 从已选集合读取（搜索过滤会重建列表 DOM，不能从勾选框读）
-      if (ids.length < 2) { toast("搭子组至少需要 2 人", "err"); return true; }
-      if (g) { g.name = name; g.memberIds = ids; g.court = court; } else partnerGroups.push({ id: Date.now(), name, memberIds: ids, court });
+      if (selected.size < 2) { toast("搭子组至少需要 2 人", "err"); return true; }
+      const typeSet = new Set([...selected.entries()].map(([, tk]) => ticketMap[tk] || suggestSessionType(tk)));
+      if (typeSet.size > 1) { toast("所选名额必须属于同一场次类型（如都是微对抗）", "err"); return true; }
+      const memberIds = [...selected.keys()], memberTickets = {};
+      selected.forEach((tk, id) => memberTickets[id] = tk);
+      if (g) { g.name = name; g.memberIds = memberIds; g.memberTickets = memberTickets; g.court = court; }
+      else partnerGroups.push({ id: Date.now(), name, memberIds, memberTickets, court });
       saveGroups(); renderPartners(); toast("已保存搭子组", "ok");
     }}]);
   const box = $("#modalBox");
   const renderList = () => {
     const q = box.querySelector("#gSearch").value.trim().toLowerCase();
-    box.querySelector("#gList").innerHTML = active
+    box.querySelector("#gList").innerHTML = slots
       .filter(p => !q || p.nickname.toLowerCase().includes(q) || p.playId.includes(q))
-      .map(p => `<label style="display:flex; gap:8px; align-items:center; padding:5px 10px; border-bottom:1px solid var(--line); cursor:pointer">
-        <input type="checkbox" value="${esc(p.playId)}" ${selected.has(p.playId)?"checked":""}>
-        <b>${esc(p.nickname)}</b><span class="muted">${esc(p.playId)} · ${esc(regRating(p.playId)||"未评级")} · ${esc(p.gender)}</span>
-        <span class="muted" style="flex:1; text-align:right">${esc(p.ticket.slice(0,18))}</span></label>`).join("");
-    box.querySelectorAll("#gList input").forEach(i => i.onchange = () => { i.checked ? selected.add(i.value) : selected.delete(i.value); renderChips(); });
+      .map(p => {
+        const k = p.playId + "∮" + p.ticket;
+        const nm = disp.get(p.regId) || p.nickname;
+        const multi = slotCnt.get(k) > 1 ? `<span class="chip warn">名额×${slotCnt.get(k)}</span>` : "";
+        return `<label style="display:flex; gap:8px; align-items:center; padding:5px 10px; border-bottom:1px solid var(--line); cursor:pointer">
+          <input type="checkbox" data-id="${esc(p.playId)}" data-ticket="${esc(p.ticket)}" ${selected.get(p.playId) === p.ticket ? "checked" : ""}>
+          <b>${esc(nm)}</b><span class="chip info">${esc(typeLabel(p.ticket))}</span>${multi}
+          <span class="muted">${esc(p.playId)} · ${esc(regRating(p.playId)||"未评级")} · ${esc(p.gender)}</span></label>`;
+      }).join("");
+    box.querySelectorAll("#gList input").forEach(inp => inp.onchange = () => {
+      if (inp.checked) selected.set(inp.dataset.id, inp.dataset.ticket);
+      else if (selected.get(inp.dataset.id) === inp.dataset.ticket) selected.delete(inp.dataset.id);
+      renderChips();
+    });
   };
   const renderChips = () => {
     box.querySelector("#gSelChips").innerHTML = `<span class="muted">已选 ${selected.size} 人：</span>` +
-      [...selected].map(id => { const p = active.find(x => x.playId === id); return p ? `<span class="mchip">${esc(p.nickname)}<span class="x" data-id="${esc(id)}">×</span></span>` : ""; }).join("");
+      [...selected.entries()].map(([id, tk]) => {
+        const p = active.find(x => x.playId === id && x.ticket === tk);
+        return `<span class="mchip">${esc(p ? (disp.get(p.regId) || p.nickname) : id)}<span class="muted">${esc(typeLabel(tk))}</span><span class="x" data-id="${esc(id)}">×</span></span>`;
+      }).join("");
     box.querySelectorAll("#gSelChips .x").forEach(x => x.onclick = () => { selected.delete(x.dataset.id); renderList(); renderChips(); });
   };
   box.querySelector("#gSearch").oninput = renderList;
@@ -1492,12 +1540,17 @@ function renderPairs(){
   const box = $("#pairList");
   if (!reg) { box.innerHTML = `<div class="empty">请先在步骤①上传报名表</div>`; return; }
   const active = reg.participants.filter(p => !p.excluded);
+  const disp = computeDisplayNames(active);
+  const typeLabel = t => { const ty = ticketMap[t] || suggestSessionType(t); return SESSIONS[ty] ? SESSIONS[ty].label : ""; };
   if (!excludePairs.length) { box.innerHTML = `<div class="muted">暂无互斥对。比如 A 和 B 不合拍，添加后系统会尽量避免把他们分到同一场地。</div>`; return; }
   box.innerHTML = excludePairs.map(pr => {
-    const mem = pr.memberIds.map(id => active.find(p => p.playId === id)).filter(Boolean);
+    const mem = pr.memberIds.map(id => {
+      const tk = pr.memberTickets && pr.memberTickets[String(id)];
+      return active.find(p => p.playId === id && (!tk || p.ticket === tk)) || active.find(p => p.playId === id);
+    }).filter(Boolean);
     return `<div class="pgroup" data-pid="${esc(pr.id)}"><div class="ghead"><b>${esc(pr.name)}</b>
       <span style="flex:1"></span><button class="btn small ghost" data-act="edit">编辑</button><button class="btn small danger" data-act="del">删除</button></div>
-      <div class="memberchips">${mem.map(p => `<span class="mchip">${esc(p.nickname)}<span class="${p.gender==="女"?"female":"male"}">${esc(p.gender)}</span></span>`).join("")}</div></div>`;
+      <div class="memberchips">${mem.map(p => `<span class="mchip">${esc(disp.get(p.regId) || p.nickname)}<span class="muted">${esc(typeLabel(p.ticket))}</span><span class="${p.gender==="女"?"female":"male"}">${esc(p.gender)}</span></span>`).join("")}</div></div>`;
   }).join("");
   $$("#pairList .pgroup").forEach(el => {
     const pr = excludePairs.find(x => String(x.id) === el.dataset.pid);
@@ -1507,39 +1560,55 @@ function renderPairs(){
   });
 }
 function openPairEditor(pr){
-  const active = []; const seenP = new Set();
-  reg.participants.filter(p => !p.excluded).forEach(p => { if (!seenP.has(p.playId)) { seenP.add(p.playId); active.push(p); } });
-  const selected = new Set(pr ? pr.memberIds : []);
+  // 名额级选择（玩聚号+票种），互斥作用于所选名额所在场次
+  const active = reg.participants.filter(p => !p.excluded);
+  const disp = computeDisplayNames(active);
+  const typeLabel = t => { const ty = ticketMap[t] || suggestSessionType(t); return SESSIONS[ty] ? SESSIONS[ty].label : "未配场次"; };
+  const slots = []; const seen = new Set();
+  active.forEach(p => { const k = p.playId + "∮" + p.ticket; if (seen.has(k)) return; seen.add(k); slots.push(p); });
+  const selected = new Map();   // playId → ticket
+  if (pr) (pr.memberIds || []).forEach(id => {
+    const tk = pr.memberTickets && pr.memberTickets[String(id)];
+    active.filter(p => p.playId === String(id) && (!tk || p.ticket === tk))
+      .forEach(p => { if (!selected.has(p.playId)) selected.set(p.playId, p.ticket); });
+  });
   openModal(pr ? "编辑互斥对" : "新增互斥对（2人，尽量不同场）", `
     <div><input type="text" id="pSearch" placeholder="搜索昵称/玩聚号…" style="width:100%"></div>
     <div id="gSelChips" style="margin:8px 0"></div>
     <div id="gList" style="max-height:320px; overflow:auto; border:1px solid var(--line); border-radius:8px"></div>
-    <p class="muted" style="margin-top:8px">选择 2 人。若其中有人绑定了搭子组或等级无处可换，可能无法分离，结果中会提示。</p>`,
+    <p class="muted" style="margin-top:8px">选择 2 个名额（同人多名额会显示 文文/文文1 区分）。若有人绑定了搭子组或等级无处可换，可能无法分离，结果中会提示。</p>`,
     [{label:"取消",ghost:true},{label:"保存",onClick(box){
-      const ids = [...selected];
-      if (ids.length !== 2) { toast("互斥对需要恰好 2 人", "err"); return true; }
-      const nm = (p => p ? p.nickname : ids[0])(active.find(x => x.playId === ids[0]));
-      const nm2 = (p => p ? p.nickname : ids[1])(active.find(x => x.playId === ids[1]));
-      if (pr) { pr.memberIds = ids; } else excludePairs.push({ id: Date.now(), name: nm + " ✕ " + nm2, memberIds: ids });
+      if (selected.size !== 2) { toast("互斥对需要恰好 2 人", "err"); return true; }
+      const memberIds = [...selected.keys()], memberTickets = {};
+      selected.forEach((tk, id) => memberTickets[id] = tk);
+      const dispOf = id => { const tk = memberTickets[id]; const p = active.find(x => x.playId === id && x.ticket === tk); return p ? (disp.get(p.regId) || p.nickname) : id; };
+      const nm = dispOf(memberIds[0]) + " ✕ " + dispOf(memberIds[1]);
+      if (pr) { pr.memberIds = memberIds; pr.memberTickets = memberTickets; pr.name = nm; }
+      else excludePairs.push({ id: Date.now(), name: nm, memberIds, memberTickets });
       savePairs(); renderPairs(); toast("已保存互斥对", "ok");
     }}]);
   const box = $("#modalBox");
   const renderList = () => {
     const q = box.querySelector("#pSearch").value.trim().toLowerCase();
-    box.querySelector("#gList").innerHTML = active
+    box.querySelector("#gList").innerHTML = slots
       .filter(p => !q || p.nickname.toLowerCase().includes(q) || p.playId.includes(q))
       .map(p => `<label style="display:flex; gap:8px; align-items:center; padding:5px 10px; border-bottom:1px solid var(--line); cursor:pointer">
-        <input type="checkbox" value="${esc(p.playId)}" ${selected.has(p.playId)?"checked":""} ${selected.size >= 2 && !selected.has(p.playId) ? "disabled" : ""}>
-        <b>${esc(p.nickname)}</b><span class="muted">${esc(p.playId)} · ${esc(regRating(p.playId)||"未评级")} · ${esc(p.gender)}</span></label>`).join("");
+        <input type="checkbox" data-id="${esc(p.playId)}" data-ticket="${esc(p.ticket)}" ${selected.get(p.playId) === p.ticket ? "checked" : ""}>
+        <b>${esc(disp.get(p.regId) || p.nickname)}</b><span class="chip info">${esc(typeLabel(p.ticket))}</span>
+        <span class="muted">${esc(p.playId)} · ${esc(p.gender)}</span></label>`).join("");
     box.querySelectorAll("#gList input").forEach(i => i.onchange = () => {
-      if (i.checked && selected.size >= 2) { i.checked = false; toast("互斥对只选 2 人，先取消一个再换", "err"); return; }
-      i.checked ? selected.add(i.value) : selected.delete(i.value);
+      if (i.checked && selected.size >= 2) { toast("互斥对只选 2 人，先取消一个再换", "err"); return; }
+      if (i.checked) selected.set(i.dataset.id, i.dataset.ticket);
+      else if (selected.get(i.dataset.id) === i.dataset.ticket) selected.delete(i.dataset.id);
       renderChips(); renderList();
     });
   };
   const renderChips = () => {
     box.querySelector("#gSelChips").innerHTML = `<span class="muted">已选 ${selected.size}/2：</span>` +
-      [...selected].map(id => { const p = active.find(x => x.playId === id); return p ? `<span class="mchip">${esc(p.nickname)}<span class="x" data-id="${esc(id)}">×</span></span>` : ""; }).join("");
+      [...selected.entries()].map(([id, tk]) => {
+        const p = active.find(x => x.playId === id && x.ticket === tk);
+        return `<span class="mchip">${esc(p ? (disp.get(p.regId) || p.nickname) : id)}<span class="muted">${esc(typeLabel(tk))}</span><span class="x" data-id="${esc(id)}">×</span></span>`;
+      }).join("");
     box.querySelectorAll("#gSelChips .x").forEach(x => x.onclick = () => { selected.delete(x.dataset.id); renderList(); renderChips(); });
   };
   box.querySelector("#pSearch").oninput = renderList;
@@ -1685,18 +1754,27 @@ function validateGrouping(){
 
   const confirmations = [];
   for (const g of partnerGroups) {
-    const inActive = g.memberIds.filter(id => byId.has(id));
-    const missing = g.memberIds.length - inActive.length;
-    if (missing > 0) blocking.push({ code:"E05", msg:`搭子组「${g.name}」有 ${missing} 名成员不在本次有效报名中，请调整绑定` });
+    // 名额级校验：有 memberTickets 时按「玩聚号+票种」核对名额
+    const slotActive = id => {
+      const tk = g.memberTickets && g.memberTickets[String(id)];
+      return active.find(p => p.playId === String(id) && (!tk || p.ticket === tk));
+    };
+    const missing = g.memberIds.filter(id => !slotActive(id)).length;
+    if (missing > 0) blocking.push({ code:"E05", msg:`搭子组「${g.name}」有 ${missing} 名成员的绑定名额不在本次有效报名中，请调整绑定` });
+    const inActive = g.memberIds.filter(id => slotActive(id));
     if (inActive.length >= 2) {
-      // 组的场次 = 全员共有类型（一人报多场次时，以共有场次绑定，其余场次名额个人参与）
-      const typesOfPerson = id => [...new Set(active.filter(p => p.playId === id).map(p => types[p.ticket]).filter(Boolean))];
-      const lists = inActive.map(typesOfPerson);
-      const inter = lists.reduce((acc, l) => acc.filter(t => l.includes(t)), lists[0] || []);
-      if (!inter.length) blocking.push({ code:"E06", msg:`搭子组「${g.name}」成员没有共同场次类型的票种，无法同池，请调整绑定或票种` });
+      let inter;
+      if (g.memberTickets) {
+        const tys = [...new Set(inActive.map(id => types[slotActive(id).ticket]).filter(Boolean))];
+        inter = tys.length === 1 ? tys : [];
+      } else {
+        const typesOfPerson = id => [...new Set(active.filter(p => p.playId === id).map(p => types[p.ticket]).filter(Boolean))];
+        const lists = inActive.map(typesOfPerson);
+        inter = lists.reduce((acc, l) => acc.filter(t => l.includes(t)), lists[0] || []);
+      }
+      if (!inter.length) blocking.push({ code:"E06", msg:`搭子组「${g.name}」所选名额没有共同的场次类型，无法同池，请调整绑定或票种` });
       else {
         const gType = inter[0];
-        // 有效档位：未评级按该场次默认档（E07 跨档判定与分组口径一致）
         const effOf = id => { const rr = regRating(id); if (rr != null) return ratingValue(rr); const d = DEFAULT_LEVEL[gType]; return d !== undefined ? d : null; };
         const vals = inActive.map(effOf).filter(v => v !== null);
         if (gType !== "FREE" && vals.length >= 2 && Math.max(...vals) - Math.min(...vals) > 0.5 + EPS && crossDecisions[g.id] !== "split")
