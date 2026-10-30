@@ -706,10 +706,41 @@ function buildGrouping(input){
     const names = [];
     for (const t in input.ticketTypes) if (input.ticketTypes[t] === st) {
       const cn = (input.ticketCourts && input.ticketCourts[t]) || [];
-      names.push(...(cn.length ? cn : autoCourtNames(1, st)));
+      for (const n of (cn.length ? cn : autoCourtNames(1, st))) if (!names.includes(n)) names.push(n);   // 多票种同名场地去重
     }
-    if (!names.length) names.push("场地1");
+    if (!names.length) names.push("1号场");
     const C = poolSizes[st], N = names.length;
+    if (!C) {
+      /* 每场人数 0 = 不限：按场地均衡均分（搭子组同场不拆；场内按等级↓玩聚号↑排梯度；不做女生均衡） */
+      const sortedUnits = units[st].slice().sort((a, b) => (b.level - a.level) || (a.key - b.key));
+      const bins = names.map(nm => ({ units: [], size: 0, name: nm }));
+      for (const u of sortedUnits) {
+        const b = bins.reduce((m, x) => x.size < m.size ? x : m, bins[0]);
+        b.units.push(u); b.size += u.size;
+      }
+      bins.forEach(b => {
+        if (!b.units.length) return;
+        b.units.sort((a, b2) => (b2.level - a.level) || (a.key - b2.key));
+        let g = 0;
+        const flat = b.units.flatMap(u => u.members.slice().sort((x, y) => cmpId(x.playId, y.playId)).map(m => {
+          m.__groupId = u.isGroup ? u.groupId : null; m.__groupName = u.isGroup ? u.groupName : null;
+          m.__cross = u.crossKept; m.__unitLevel = u.level; m.__grad = ++g; return m;
+        }));
+        courts.push({
+          name: b.name, sessionType: st, label: SESSIONS[st].label, mainLevel: b.units[0].level,
+          underfull: false, noRotation: true,
+          members: flat.map((m, idx) => ({
+            playId: m.playId, regId: m.regId, nickname: m.nickname,
+            displayName: dispName.get(m.regId) || m.nickname,
+            rating: m.rating, gender: m.gender, gradient: m.__grad, rotation: idx + 1,
+            unitLevel: m.__unitLevel != null ? m.__unitLevel : ratingValue(m.rating),
+            clampedTo: m.__clampTo != null ? fmtLevel(m.__clampTo) : null,
+            groupId: m.__groupId || null, groupName: m.__groupName || null, crossKept: !!m.__cross
+          }))
+        });
+      });
+      continue;   // 跳过轮转池构建（S4–S8）
+    }
 
     // S4 超员处理（E11 确认后 allowOverflow）：按报名顺序保留，整单元取舍
     const total = poolUnits.reduce((s, u) => s + u.size, 0);
@@ -734,7 +765,7 @@ function buildGrouping(input){
       // 等级梯队隔离导致无法跨池调配时，向组织者说明
       const fcs = pools.map(p => p.units.reduce((s, u) => s + u.members.reduce((a, m) => a + (m.gender === "女" ? 1 : 0), 0), 0));
       if (fcs.length > 1 && Math.max(...fcs) - Math.min(...fcs) > 1)
-        warnings.push({ code: "F-BALANCE", msg: `${SESSIONS[st].label}各场地女生数为 ${fcs.join("/")}，其余场地已无可对换的男生个人名额（多为搭子组）或仅一块场地，无法进一步均衡` });
+        warnings.push({ code: "F-BALANCE", msg: `${SESSIONS[st].label}各场地女生数为 ${fcs.join("/")}（等级相近优先，同档/相邻档内已无可对换名额；全男或全女场属正常，如需更均衡可微调成员评级）` });
     }
     // 互斥对调换：同池的互斥成员尽量分离（只动个人；无可用场地则保留并提示）
     if (input.excludePairs && input.excludePairs.length)
@@ -766,7 +797,6 @@ function buildGrouping(input){
           gradient: m.__grad, rotation: idx + 1,
           unitLevel: m.__unitLevel != null ? m.__unitLevel : ratingValue(m.rating),
           clampedTo: m.__clampTo != null ? fmtLevel(m.__clampTo) : null,
-          genderBal: !!m.__gb,
           groupId: m.__groupId || null, groupName: m.__groupName || null,
           crossKept: !!m.__cross
         }))
@@ -974,10 +1004,8 @@ function applyExclusions(pools, pairs, st, warnings){
 /* 女生跨池均衡：同场次各池女生数尽量接近（差 ≤1）。
  * 只交换"个人单元"（不拆搭子组、不动跨档保留组），同等级优先对换；
  * 对换需同时满足双方池的主档 ±0.5 约束，等级归属与容量不变 */
-/* 女生跨池均衡（2026-10-30 v2.8：按人头计数；男女均衡优先于等级梯队）：
- * 女生数按成员实际性别统计（混性别搭子组只计其中女生，不再整组计入）；
- * 对换优先级：同等级 → 双方主档±0.5 → 放宽等级限制（跨档调换，成员标注 genderBal）。
- * 仍只动个人单元（不拆搭子组/跨档保留组），容量与等级梯度序不变 */
+/* 女生跨池均衡（2026-10-30 v3.0 修订：按人头计数；等级相近优先，男女均衡仅在同档/相邻档内做，
+ * 全男或全女场可接受——用户确认等级体验优先于性别均衡）。只动个人单元，不拆搭子组。 */
 function balanceFemalesAcrossPools(pools){
   if (!pools.length) return pools;
   const fCount = p => p.units.reduce((s, u) => s + u.members.reduce((a, m) => a + (m.gender === "女" ? 1 : 0), 0), 0);
@@ -999,13 +1027,12 @@ function balanceFemalesAcrossPools(pools){
       const males = indiv(dst, "男");
       if (!males.length) continue;
       const byDist = males.slice().sort((a, b) => Math.abs(a.level - fem.level) - Math.abs(b.level - fem.level));
-      let male = byDist.find(u => u.level === fem.level);
-      if (!male) male = byDist.find(u => Math.abs(fem.level - dst.main) <= 0.5 + EPS && Math.abs(u.level - src.main) <= 0.5 + EPS);
-      if (!male) male = byDist[0];   // 男女均衡优先于等级梯队：就近选男生跨档对换
+      // 2026-10-30 优化2：等级相近优先——只做同等级或双方主档±0.5 的对换，不跨档硬匀（全男/全女场可接受）
+      const male = byDist.find(u => u.level === fem.level) ||
+        byDist.find(u => Math.abs(fem.level - dst.main) <= 0.5 + EPS && Math.abs(u.level - src.main) <= 0.5 + EPS);
+      if (!male) continue;
       src.units = src.units.filter(u => u !== fem); src.units.push(male);
       dst.units = dst.units.filter(u => u !== male); dst.units.push(fem);
-      if (Math.abs(fem.level - dst.main) > 0.5 + EPS) fem.members.forEach(m => { m.__gb = true; });
-      if (Math.abs(male.level - src.main) > 0.5 + EPS) male.members.forEach(m => { m.__gb = true; });
       moved = true; break;
     }
     if (!moved) break;
@@ -1058,7 +1085,7 @@ function checkInvariants(result, input){
       pooledIds.push(m.regId != null ? m.regId : m.playId);
       const rv = m.unitLevel != null ? m.unitLevel : ratingValue(m.rating);
       if (rv === null) { v.push(`I6 ${c.name}: ${m.nickname} 无有效档位却在池中`); continue; }
-      if (!m.crossKept && !m.genderBal && Math.abs(rv - main) > 0.5 + EPS)
+      if (!m.crossKept && Math.abs(rv - main) > 0.5 + EPS)
         v.push(`I1 ${c.name}: ${m.nickname}(${m.rating}) 与主档 ${fmtLevel(main)} 差超过0.5`);
     }
     // I4 女双全女
@@ -1125,7 +1152,7 @@ function checkInvariants(result, input){
 
 <script>
 /* ═════════════════════════ 应用层（UI / 存储 / 同步） ═════════════════════════ */
-const APP_VERSION = "v2.9（2026-10-30）";
+const APP_VERSION = "v3.0（2026-10-30）";
 (function(){
 "use strict";
 const $ = s => document.querySelector(s);
@@ -1337,7 +1364,7 @@ function importReg(file){
       reg = { ...parsed, fileName: file.name };
       store.write("rc_reg", reg);
       crossDecisions = {}; allowOverflow = false; lastResult = null;
-      ticketCfgState = {};   // 新报名表：场地配置重新开始（场地号池仍记住）
+      sessionCfg = {};   // 新报名表：球局场地配置重新开始（场地号池仍记住）
       partnerGroups = partnerGroups.filter(g => g.memberIds.every(id => allRegIds().includes(id)));
       excludePairs = excludePairs.filter(pr => pr.memberIds.every(id => allRegIds().includes(id)));
       saveGroups(); savePairs();
@@ -1625,7 +1652,8 @@ function openPairEditor(pr){
 }
 
 /* ── 步骤3：票种与场地（场地数/场地号均为下拉，支持新增并记住） ── */
-let ticketCfgState = {};   // { 票种: {count, names[]} }，切换步骤不丢，换报名表重置
+/* ── 步骤③：按球局配置（2026-10-30 v3.0）：票种归属球局 / 每场人数(0=不限均分) / 场地号 ── */
+let sessionCfg = {};   // { 场次类型: {count, names[]} }，切换步骤不丢，换报名表重置
 function courtNamePool(){
   const preset = Array.from({ length: 22 }, (_, i) => `${i + 1}号场`);   // 固定预置 1~22号场
   const saved = store.read("rc_court_names", null) || [];
@@ -1644,65 +1672,74 @@ function countOptions(){ return [...new Set([1,2,3,4,5,6,7,8, ...store.read("rc_
 function renderTickets(){
   if (!reg) { $("#ticketList").innerHTML = `<div class="empty">请先上传报名表</div>`; return; }
   const tickets = [...new Set([...reg.participants, ...reg.waitlist].map(r => r.ticket))];
-  $("#ticketList").innerHTML = tickets.map(t => ticketCardHtml(t)).join("");
-  bindTicketCards();
+  const byType = {};
+  tickets.forEach(t => { const ty = ticketMap[t] || suggestSessionType(t); ticketMap[t] = ty; (byType[ty] = byType[ty] || []).push(t); });
+  const order = ["MX","HS","NS","FREE"].filter(ty => byType[ty] && byType[ty].length);
+  $("#ticketList").innerHTML = order.map((ty, idx) => sessionCardHtml(ty, byType[ty], idx)).join("");
+  bindSessionCards();
 }
-function ticketCardHtml(t){
-  const cnt = reg.participants.filter(p => p.ticket === t && !p.excluded).length;
-  const type = ticketMap[t] || suggestSessionType(t);
-  const st = ticketCfgState[t] || (ticketCfgState[t] = { count: 1, names: [] });
+function sessionCardHtml(ty, tickets, idx){
+  const st = sessionCfg[ty] || (sessionCfg[ty] = { count: 1, names: [] });
   const pool = courtNamePool();
-  const prefix = { MX: "萌新", HS: "混双", NS: "女双", FREE: "自由" }[type] || "场地";
-  const sug = suggestSessionType(t);
-  const sugHint = type !== sug ? `<span class="chip warn tSug" data-sug="${sug}" style="cursor:pointer" title="按票种等级区间建议，点击采用">建议${SESSIONS[sug].label}？</span>` : "";
+  const slots = tickets.reduce((sum, t) => sum + reg.participants.filter(p => p.ticket === t && !p.excluded).length, 0);
   const nameSelects = Array.from({ length: st.count }, (_, i) => {
     const cur = st.names[i] || "";
-    return `<select class="tCourt" data-idx="${i}" title="第${i+1}块场地">
-      <option value="">自动（${prefix}${i + 1}场）</option>
-      ${pool.map(n => `<option value="${esc(n)}" ${n === cur ? "selected" : ""}>${esc(n)}</option>`).join("")}
-      <option value="__add">➕ 新增场地号…</option></select>`;
+    return `<select class="tCourt" data-idx="${i}" title="第${i+1}块场地">` +
+      `<option value="" ${cur ? "" : "selected"}>自动（${i + 1}号场）</option>` +
+      pool.map(n => `<option value="${esc(n)}" ${n === cur ? "selected" : ""}>${esc(n)}</option>`).join("") +
+      `<option value="__add">➕ 新增场地号…</option></select>`;
   }).join("");
-  return `<div class="ticketcfg" data-ticket="${esc(t)}">
-    <div class="tname">${esc(t)}　<span class="chip info">${cnt} 个名额已报名</span></div>
+  return `<div class="ticketcfg" data-type="${ty}">
+    <div class="tname">${idx + 1}. ${SESSIONS[ty].label}　<span class="chip info">${slots} 个名额</span> <span class="chip ok">${tickets.length} 个票种已并入</span></div>
     <div class="trow">
-      <label class="field"><span>场次类型 ${sugHint}</span><select class="tType">${Object.keys(SESSIONS).map(k => `<option value="${k}" ${type === k ? "selected" : ""}>${SESSIONS[k].label}</option>`).join("")}</select></label>
+      <label class="field"><span>每场人数（0=不限均分）</span><input type="number" class="sPool" min="0" max="30" value="${config.poolSizes[ty] != null ? config.poolSizes[ty] : 0}"></label>
       <label class="field"><span>场地数</span><select class="tCount">${countOptions().map(n => `<option value="${n}" ${n === st.count ? "selected" : ""}>${n}</option>`).join("")}<option value="__add">➕ 自定义数量…</option></select></label>
     </div>
     <div class="trow" style="align-items:center"><span class="muted" style="white-space:nowrap">场地号：</span><span style="display:flex;gap:6px;flex-wrap:wrap">${nameSelects}</span></div>
-  </div>`;
+    <div class="trow" style="align-items:center;margin-top:6px"><span class="muted" style="white-space:nowrap">票种归属：</span>
+      ${tickets.map(t => `<select class="tMove" data-ticket="${esc(t)}" title="${esc(t.slice(0, 40))}">${Object.keys(SESSIONS).map(k => `<option value="${k}" ${ty === k ? "selected" : ""}>${SESSIONS[k].label}</option>`).join("")}</select>`).join("")}
+    </div></div>`;
 }
-function bindTicketCards(){
+function bindSessionCards(){
   $$("#ticketList .ticketcfg").forEach(el => {
-    const t = el.dataset.ticket;
-    const st = ticketCfgState[t] || (ticketCfgState[t] = { count: 1, names: [] });
-    el.querySelector(".tType").onchange = e => { ticketMap[t] = e.target.value; store.write("rc_ticket_map", ticketMap); renderTickets(); };
-    const sugChip = el.querySelector(".tSug");
-    if (sugChip) sugChip.onclick = () => {
-      ticketMap[t] = sugChip.dataset.sug; store.write("rc_ticket_map", ticketMap); renderTickets();
+    const ty = el.dataset.type;
+    const st = sessionCfg[ty] || (sessionCfg[ty] = { count: 1, names: [] });
+    const poolInput = el.querySelector(".sPool");
+    poolInput.onchange = () => {
+      const v = parseInt(poolInput.value);
+      if (Number.isFinite(v) && v >= 0 && v <= 30) { config.poolSizes[ty] = v; store.write("rc_config", config); toast(`${SESSIONS[ty].label}每场人数已设为 ${v}${v === 0 ? "（不限均分）" : ""}`, "ok"); }
+      poolInput.value = config.poolSizes[ty] != null ? config.poolSizes[ty] : 0;
     };
     el.querySelector(".tCount").onchange = e => {
-      if (e.target.value === "__add") { askCustomCount(t); return; }
+      if (e.target.value === "__add") { askCustomCount(ty); return; }
       st.count = parseInt(e.target.value) || 1; renderTickets();
     };
     el.querySelectorAll(".tCourt").forEach(sel => sel.onchange = () => {
-      if (sel.value === "__add") { askNewCourtName(t, +sel.dataset.idx); return; }
+      if (sel.value === "__add") { askNewCourtName(ty, +sel.dataset.idx); return; }
       st.names[+sel.dataset.idx] = sel.value;
+    });
+    el.querySelectorAll(".tMove").forEach(sel => sel.onchange = () => {
+      const t = sel.dataset.ticket;
+      ticketMap[t] = sel.value;
+      store.write("rc_ticket_map", ticketMap);
+      renderTickets();
+      toast(`票种「${t.slice(0, 16)}…」已并入${SESSIONS[sel.value].label}`, "ok");
     });
   });
 }
-function askCustomCount(ticket){
+function askCustomCount(ty){
   openModal("自定义场地数", `<label class="field"><span>场地数（1~30）</span><input type="number" id="ccNum" min="1" max="30" value="1"></label>`,
     [{ label:"取消", ghost:true, onClick(){ renderTickets(); } },
      { label:"确定", onClick(box){
        const v = parseInt(box.querySelector("#ccNum").value);
        if (!(v >= 1 && v <= 30)) { toast("请输入 1~30 的数字", "err"); return true; }
-       ticketCfgState[ticket].count = v;
+       sessionCfg[ty].count = v;
        const opts = store.read("rc_court_count_opts", []);
        if (!opts.includes(v) && v > 8) { opts.push(v); store.write("rc_court_count_opts", opts); }
        renderTickets();
      }}]);
 }
-function askNewCourtName(ticket, idx){
+function askNewCourtName(ty, idx){
   openModal("新增场地号", `<label class="field"><span>场地号（如 16 或 16号场，新增后记住可复用）</span><input type="text" id="cnName" placeholder="16"></label>`,
     [{ label:"取消", ghost:true, onClick(){ renderTickets(); } },
      { label:"新增", onClick(box){
@@ -1710,32 +1747,29 @@ function askNewCourtName(ticket, idx){
        if (!n) { toast("请输入场地号", "err"); return true; }
        if (/^\d+$/.test(n)) n += "号场";
        addCourtName(n);
-       ticketCfgState[ticket].names[idx] = n;
+       sessionCfg[ty].names[idx] = n;
        renderTickets();
      }}]);
 }
 function collectTicketConfig(){
-  const types = {}, courts = {};
-  if (!reg) return { types, courts };
+  const types = {}, courtsByType = {};
+  if (!reg) return { types, courtsByType };
   const tickets = [...new Set([...reg.participants, ...reg.waitlist].map(r => r.ticket))];
-  for (const t of tickets) {
-    const type = ticketMap[t] || suggestSessionType(t);
-    types[t] = type; ticketMap[t] = type;
-    const st = ticketCfgState[t] || { count: 1, names: [] };
-    const autos = autoCourtNames(st.count, type);
+  for (const t of tickets) { const ty = ticketMap[t] || suggestSessionType(t); types[t] = ty; ticketMap[t] = ty; }
+  for (const ty of new Set(Object.values(types))) {
+    const st = sessionCfg[ty] || { count: 1, names: [] };
+    const autos = autoCourtNames(st.count, ty);
     const names = [];
     for (let i = 0; i < st.count; i++) {
       const n = st.names[i] || autos[i];
       names.push(n);
       if (st.names[i]) addCourtName(n);   // 用过的场地号记住，下次可选
     }
-    courts[t] = names;
+    courtsByType[ty] = names;
   }
   store.write("rc_ticket_map", ticketMap);
-  return { types, courts };
+  return { types, courtsByType };
 }
-
-/* ── 校验 E01–E12 ── */
 function validateGrouping(){
   const blocking = [], notes = [];
   if (!reg) blocking.push({ code:"E01", msg:"尚未上传报名表", fix:"step1" });
@@ -1757,8 +1791,8 @@ function validateGrouping(){
 
   for (const t in types) {
     if (!types[t]) blocking.push({ code:"E09", msg:`票种「${t}」未选择场次类型` });
-    const cntCfg = ticketCfgState[t] ? ticketCfgState[t].count : 1;
-    if (types[t] && !(cntCfg >= 1)) blocking.push({ code:"E10", msg:`票种「${t.slice(0,30)}」请至少配置 1 块场地` });
+    const cntCfg = sessionCfg[types[t]] ? sessionCfg[types[t]].count : 1;
+    if (types[t] && !(cntCfg >= 1)) blocking.push({ code:"E10", msg:`${SESSIONS[types[t]] ? SESSIONS[types[t]].label : "球局"}请至少配置 1 块场地` });
   }
 
   const confirmations = [];
@@ -1873,17 +1907,17 @@ function proceedConfirmations(remaining, resolved){
      { label:"保留绑定", onClick(){ crossDecisions[c.group.id] = "keep"; resolved.push(c); setTimeout(()=>proceedConfirmations(remaining.slice(1), resolved), 100); return false; }}]);
 }
 function proceedOverflow(resolved){
-  const { types, courts } = collectTicketConfig();
+  const { types, courtsByType } = collectTicketConfig();
+  const courts = {}; for (const t in types) courts[t] = courtsByType[types[t]] || ["1号场"];   // 兼容按票种取场地
   const poolSizes = config.poolSizes;
   const sessCount = { MX:0, HS:0, NS:0, FREE:0 };
   const active = reg.participants.filter(p => !p.excluded);
   for (const p of active) { const st = types[p.ticket]; if (sessCount[st] !== undefined) sessCount[st]++; }
   const overflowSess = [];
   for (const st of ["MX","HS","NS","FREE"]) {
-    if (st === "FREE" && !(poolSizes.FREE > 0)) continue;   // 自由场不限容量时不做超员检查
-    let cap = 0;
-    for (const t in types) if (types[t] === st) cap += (courts[t] || []).length * (poolSizes[st] || 0);
-    if (poolSizes[st] > 0 && sessCount[st] > cap) overflowSess.push({ st, count: sessCount[st], cap });
+    if (!(poolSizes[st] > 0)) continue;   // 每场人数 0=不限：不做超员检查
+    const cap = (courtsByType[st] || []).length * poolSizes[st];
+    if (sessCount[st] > cap) overflowSess.push({ st, count: sessCount[st], cap });
   }
   if (overflowSess.length && !allowOverflow) {
     openModal("E11 报名超员", overflowSess.map(o => `<div class="errlist"><b>${SESSIONS[o.st].label}</b>：报名 ${o.count} 人 > 场地容量 ${o.cap} 人。<br>默认按<b>报名先后</b>保留 ${o.cap} 人，其余转候补（可在报名列表手动调整后重试）。</div>`).join(""),
@@ -1897,7 +1931,8 @@ function proceedOverflow(resolved){
   doGrouping();
 }
 function doGrouping(){
-  const { types, courts } = collectTicketConfig();
+  const { types, courtsByType } = collectTicketConfig();
+  const courts = {}; for (const t in types) courts[t] = courtsByType[types[t]] || ["1号场"];   // 兼容按票种取场地
   const input = {
     // 参赛者关联成员库评级（核心算法约定 participants 自带 rating）
     participants: reg.participants.map(p => ({ ...p, rating: memberOf(p.playId) ? regRating(p.playId) : null })),
@@ -1945,7 +1980,7 @@ function renderResult(){
         <span class="${m.gender==="女"?"female":"male"}">${m.gender==="女"?"♀":"♂"}</span>
         <span class="muted">${m.rating ? (m.clampedTo ? esc(m.rating) + "·按" + esc(m.clampedTo) + "档" : esc(m.rating)) : (m.unitLevel != null && c.sessionType !== "FREE" ? "默认"+fmtLevel(m.unitLevel) : "")}</span>
         ${m.groupName?`<span class="tag">${esc(m.groupName)}</span>`:""}
-        ${m.genderBal?`<span class="tag" style="background:#e3f2fd">均衡调位</span>`:""}${m.crossKept?`<span class="tag" style="background:#ffe9c8">跨档搭子</span>`:""}</li>`).join("")}</ul>
+        ${m.crossKept?`<span class="tag" style="background:#ffe9c8">跨档搭子</span>`:""}</li>`).join("")}</ul>
     </div>`).join("");
   renderHistory();
 }
@@ -2046,7 +2081,7 @@ function exportResult(){
   r.courts.forEach(c => c.members.forEach(m => list.push([c.name, c.label, m.gradient||"", m.rotation||"",
     m.displayName || m.nickname,
     m.clampedTo ? m.rating + "→按" + m.clampedTo + "档" : (m.rating || (m.unitLevel != null && c.sessionType !== "FREE" ? "默认"+fmtLevel(m.unitLevel) : "")),
-    m.gender, m.playId, [m.groupName, m.crossKept?"跨档搭子":"", m.genderBal?"均衡调位":""].filter(Boolean).join("/") ])));
+    m.gender, m.playId, [m.groupName, m.crossKept?"跨档搭子":""].filter(Boolean).join("/") ])));
   const ws3 = XLSX.utils.aoa_to_sheet(list); ws3["!cols"] = [{wch:12},{wch:9},{wch:6},{wch:7},{wch:16},{wch:10},{wch:6},{wch:11},{wch:12}];
   { const cell = ws3["A1"]; if (cell) cell.s = { fill: { patternType: "solid", fgColor: { rgb: headFont.fill } }, font: { bold: true, color: { rgb: headFont.font } } }; }
   XLSX.utils.book_append_sheet(wb, ws3, "名单明细");
